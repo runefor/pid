@@ -1,0 +1,10 @@
+sahi
+opencv-python
+matplotlib
+seaborn
+pandas
+# pyarrow # 이건 설치 안해도 될 것 같음.
+dask
+dask[distributed]
+bokeh
+tabulate

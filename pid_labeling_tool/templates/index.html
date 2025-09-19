@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>P&ID 라벨링 툴</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<script src="/static/canvas.js"></script>
+<body>
+  <h2>P&ID 도면 라벨링</h2>
+
+  <label for="fileSelector">이미지 파일 선택:</label>
+  <select id="fileSelector" size="10" style="width: 300px;"
+    <option value="">-- 파일 선택 --</option>
+  </select>
+
+  <div id="canvasContainer"></div>
+
+  <select id="classSelector"></select>
+  <button onclick="saveAnnotations()">저장</button>
+
+  <script src="/static/canvas.js"></script>
+  <script>
+    // 이미지 파일 목록 불러오기
+    fetch('/file-list')
+      .then(res => res.json())
+      .then(files => {
+        const selector = document.getElementById('fileSelector');
+        files.forEach(file => {
+          const option = document.createElement('option');
+          option.value = JSON.stringify(file); // 전체 정보 저장
+          option.textContent = `${file.folder} / ${file.filename}`;
+          selector.appendChild(option);
+        });
+      });
+
+    // 파일 선택 시 이미지 로딩
+    document.getElementById('fileSelector').addEventListener('change', e => {
+      const fileData = e.target.value;
+      if (!fileData) return;
+
+      const { image, label, folder, filename } = JSON.parse(fileData);
+      const canvasId = `canvas_${folder}_${filename.replace('.png', '')}`;
+      const container = document.getElementById('canvasContainer');
+      container.innerHTML = ''; // 기존 캔버스 제거
+
+      const canvas = document.createElement('canvas');
+      canvas.id = canvasId;
+      canvas.width = 1000;
+      canvas.height = 700;
+      container.appendChild(canvas);
+
+      initCanvas(canvasId, `/assets/${image}`, label);
+    });
+  </script>
+</body>
+</html>

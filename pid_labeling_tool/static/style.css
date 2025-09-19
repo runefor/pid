@@ -1,0 +1,10 @@
+body {
+  font-family: sans-serif;
+  margin: 20px;
+}
+canvas {
+  border: 1px solid #eee;
+}
+select {
+  margin-top: 10px;
+}

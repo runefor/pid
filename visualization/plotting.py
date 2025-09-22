@@ -520,12 +520,9 @@ def plot_object_counts_distribution(
     return fig, ax
 
 
-def analyze_image_resolutions(ddf: dd.DataFrame, n_examples: int = 3) -> tuple[pd.Series, pd.DataFrame, pd.Series]:
+def analyze_image_resolutions(ddf: dd.DataFrame, n_examples: int = 3) -> tuple[pd.Series, pd.DataFrame, pd.Series, pd.Series, pd.Series]:
     """
-    images Dask 데이터프레임에서 해상도 분석을 수행합니다.
-    
-    Returns:
-        tuple: (해상도 개수, 너비/높이 통계, 해상도별 ID 예시)
+    images Dask 데이터프레임에서 해상도 분석을 수행합니다. (수정된 버전)
     """
     print("이미지 해상도 분석을 시작합니다 (Dask 연산)...")
     
@@ -534,32 +531,27 @@ def analyze_image_resolutions(ddf: dd.DataFrame, n_examples: int = 3) -> tuple[p
     if 'resolution' not in ddf.columns:
         ddf['resolution'] = ddf['width'].astype(str) + 'x' + ddf['height'].astype(str)
     
-    # 최고/최저 해상도 이미지 검색 (계획)
-    max_idx, min_idx = compute(ddf['area'].idxmax(), ddf['area'].idxmin())
-    max_area_image = ddf.loc[max_idx]
-    min_area_image = ddf.loc[min_idx]
+    # 1. 최고/최저 해상도 이미지 정보를 먼저 확정합니다.
+    print("최고/최저 해상도 이미지를 찾는 중...")
+    # 1-1. 인덱스 값을 먼저 계산
+    max_area_image_ddf = ddf.nlargest(1, 'area')
+    min_area_image_ddf = ddf.nsmallest(1, 'area')
     
-    # 해상도별 개수 세기 (계획)
+
+    # 2. 나머지 통계치들을 계산합니다.
+    print("나머지 통계치들을 계산 중...")
     resolution_counts = ddf['resolution'].value_counts()
-    
-    # 2. 너비/높이 통계 계산 (계획)
     resolution_stats = ddf[['width', 'height']].describe()
-    
-    # 3. 해상도별로 상위 n개의 image_id 예시 추출 (계획)
-    #    'id' 컬럼이 image_id를 의미한다고 가정합니다.
     resolution_id_examples = ddf.groupby('resolution')['id'].apply(
-        lambda s: s.head(n_examples).tolist(),
-        meta=('id', 'object')
+        lambda s: s.head(n_examples).tolist(), meta=('id', 'object')
     )
     
-    # 4. 계획된 모든 연산을 한 번에 실행
+    # 나머지 연산들만 한 번에 실행
     counts_pd, stats_pd, examples_pd, max_area_image_pd, min_area_image_pd = compute(
-        resolution_counts, 
-        resolution_stats, 
-        resolution_id_examples,
-        max_area_image, 
-        min_area_image,
+        resolution_counts, resolution_stats, resolution_id_examples,
+        max_area_image_ddf, min_area_image_ddf
     )
+    
     counts_pd = counts_pd.sort_values(ascending=False)
     print("계산 완료.")
     
@@ -580,14 +572,14 @@ def save_resolution_summary(
     """
     print(f"'{output_path}' 경로에 해상도 분석 리포트를 저장합니다...")
     
-    # --- ✨ 1. 모든 데이터를 하나의 DataFrame으로 먼저 합칩니다. ---
+    # 1. 모든 데이터를 하나의 DataFrame으로 먼저 합칩니다.
     counts_df = resolution_counts.to_frame(name="Image Count")
     examples_df = image_id_examples.to_frame(name="Example Image IDs")
     
     # join을 사용하여 두 정보를 합칩니다.
     combined_df = counts_df.join(examples_df)
     
-    # --- ✨ 2. 합쳐진 DataFrame을 'Image Count' 기준으로 확실하게 정렬합니다. ---
+    # 2. 합쳐진 DataFrame을 'Image Count' 기준으로 확실하게 정렬합니다.
     # 이 단계가 모든 정렬 문제를 해결합니다.
     sorted_df = combined_df.sort_values("Image Count", ascending=False)
     
@@ -609,7 +601,7 @@ def save_resolution_summary(
     report_lines.append(resolution_stats.to_markdown())
     report_lines.append("\n\n")
     
-    report_lines.append(f"## 상위 {top_n}개 해상도\n")
+    report_lines.append(f"## 가장 많이 보이는 {top_n}개 해상도\n")
     report_lines.append(sorted_df.head(top_n).to_markdown())
     report_lines.append("\n\n")
     
@@ -663,4 +655,434 @@ def plot_top_resolutions(
     else:
         plt.show()
         
+    return fig, ax
+
+
+def analyze_class_imbalance(ddf: dd.DataFrame) -> dict: # TODO: 이 함수도 계산하는 부분인데 다른쪽에다가 넣어두면 좋을 것 같긴함.
+    """
+    클래스 개수 시리즈를 받아 불균형 관련 통계치를 계산합니다.
+    """
+    print("클래스 불균형 통계치를 계산합니다...")
+    
+    # 1. Dask로 클래스별 개수 계산 (계획)
+    class_counts: pd.DataFrame = ddf['category_id'].value_counts().compute()
+    
+    # 2. 필요한 모든 통계치 계산을 Dask 연산으로 계획
+    tasks = {
+        'total_classes': class_counts.shape[0],
+        'min_count': class_counts.min(),
+        'max_count': class_counts.max(),
+        'mean_count': class_counts.mean(),
+        'median_count': class_counts.median(),
+    }
+    
+    # 3. 모든 계획을 한 번에 실행
+    results = dask.compute(tasks)[0]
+    
+    # 4. 계산된 결과를 바탕으로 추가 정보 생성
+    results['max_min_ratio'] = results['max_count'] / results['min_count'] if results['min_count'] > 0 else float('inf')
+    
+    # 5. 누적 분포 계산 (이 부분은 계산된 Pandas Series로 수행하는 것이 더 효율적)
+    cumulative_percentage = class_counts.cumsum() / class_counts.sum()
+    results['classes_for_50_percent'] = (cumulative_percentage < 0.50).sum() + 1
+    results['classes_for_80_percent'] = (cumulative_percentage < 0.80).sum() + 1
+    results['classes_for_95_percent'] = (cumulative_percentage < 0.95).sum() + 1
+    
+    print("계산 완료.")
+    return results
+
+def find_non_overlapping_classes(
+    train_ddf: dd.DataFrame,
+    test_ddf: dd.DataFrame,
+    categories_df: pd.DataFrame
+) -> dict:
+    """
+    Train과 Test 데이터셋 간에 서로 겹치지 않는 클래스를 찾아서 반환합니다.
+    """
+    print("Train/Test 데이터셋 간 클래스 ID 목록을 비교합니다...")
+    
+    # 1. 각 데이터셋의 고유 카테고리 ID 목록을 계산합니다.
+    train_ids_task = train_ddf['category_id'].unique()
+    test_ids_task = test_ddf['category_id'].unique()
+    
+    train_ids_pd, test_ids_pd = compute(train_ids_task, test_ids_task)
+    
+    # 2. set(집합)으로 변환하여 차집합을 구합니다.
+    train_id_set = set(train_ids_pd)
+    test_id_set = set(test_ids_pd)
+    
+    train_only_ids = train_id_set - test_id_set
+    test_only_ids = test_id_set - train_id_set
+    
+    # 3. ID를 실제 클래스 이름으로 변환합니다.
+    category_map = pd.Series(categories_df['name'].values, index=categories_df.index).to_dict()
+    
+    
+    train_only_names = [category_map.get(id, f"Unknown ID: {id}") for id in train_only_ids]
+    test_only_names = [category_map.get(id, f"Unknown ID: {id}") for id in test_only_ids]
+    
+    print("비교 완료.")
+    
+    return {
+        'train_only': sorted(train_only_names),
+        'test_only': sorted(test_only_names)
+    }
+
+def save_combined_imbalance_report(
+    train_stats: dict,
+    test_stats: dict,
+    non_overlapping_info: dict,
+    output_path: Path
+):
+    """
+    Train/Test 클래스 불균형 통계치와 겹치지 않는 클래스 정보를
+    하나의 종합 Markdown 리포트로 저장합니다.
+    """
+    print(f"'{output_path}' 경로에 종합 클래스 불균형 리포트를 저장합니다...")
+
+    # 읽기 쉬운 라벨 매핑
+    key_labels = {
+        'total_classes': '총 클래스 수',
+        'min_count': '최소 객체 수',
+        'max_count': '최대 객체 수',
+        'mean_count': '평균 객체 수',
+        'median_count': '객체 수 중앙값',
+        'max_min_ratio': '최대/최소 클래스 비율',
+        'classes_for_50_percent': '데이터의 50%를 차지하는 상위 클래스 수',
+        'classes_for_80_percent': '데이터의 80%를 차지하는 상위 클래스 수',
+        'classes_for_95_percent': '데이터의 95%를 차지하는 상위 클래스 수',
+    }
+    
+    # --- 리포트 내용 생성 ---
+    report_lines = ["# Train vs Test 클래스 불균형 종합 분석 리포트\n\n"]
+    
+    # Train 데이터 통계치 섹션
+    report_lines.append("## Train 데이터셋 불균형 지표\n")
+    for key, value in train_stats.items():
+        label = key_labels.get(key, key)
+        formatted_value = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
+        report_lines.append(f"- **{label}**: {formatted_value}\n")
+    report_lines.append("\n")
+
+    # Test 데이터 통계치 섹션
+    report_lines.append("## Test 데이터셋 불균형 지표\n")
+    for key, value in test_stats.items():
+        label = key_labels.get(key, key)
+        formatted_value = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
+        report_lines.append(f"- **{label}**: {formatted_value}\n")
+    report_lines.append("\n")
+    
+    # 겹치지 않는 클래스 분석 섹션
+    report_lines.append("## 데이터셋 간 클래스 비교\n")
+    train_only = non_overlapping_info['train_only']
+    test_only = non_overlapping_info['test_only']
+    
+    report_lines.append(f"- **Train 데이터셋에만 존재하는 클래스**: {len(train_only)}개\n")
+    if train_only:
+        report_lines.append("  - " + ", ".join(f"`{name}`" for name in train_only) + "\n")
+        
+    report_lines.append(f"- **Test 데이터셋에만 존재하는 클래스**: {len(test_only)}개\n")
+    if test_only:
+        report_lines.append("  - " + ", ".join(f"`{name}`" for name in test_only) + "\n")
+
+    # --- 파일 저장 ---
+    report_content = "".join(report_lines)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(report_content)
+        
+    print("리포트 저장을 완료했습니다.")
+
+
+def plot_class_distribution(
+    annotations_ddf: dd.DataFrame,
+    categories_df:pd.DataFrame,
+    title: str,
+    top_n: Optional[int] = None,
+    show_counts: bool = True,
+    x_log_scale: bool = False,
+    save_path: Optional[Path] = None
+) -> tuple:
+    """
+    클래스별 어노테이션 개수 분포를 수평 막대그래프로 그립니다.
+
+    Args:
+        annotations_df (dd.DataFrame): annotations 데이터프레임.
+        categories_df (pd.DataFrame): 카테고리 정보가 있는 Pandas 데이터프레임.
+        title (str): 플롯의 제목.
+        top_n (int, optional): 상위 n개 클래스만 표시. None이면 전체 표시.
+        show_counts (bool, optional): 막대 옆에 개수를 표시할지 여부.
+        save_path (Optional[Path], optional): None이 아니면 플롯을 해당 경로에 저장.
+    """
+    print("클래스 분포 시각화를 생성합니다...")
+    # 1. Dask로 클래스별 개수 계산 (계획)
+    class_counts_ddf = annotations_ddf['category_id'].value_counts()
+
+    # 2. 상위 N개만 선택 (계획)
+    if top_n:
+        class_counts_ddf = class_counts_ddf.nlargest(n=top_n)
+    
+    # 3. Dask Merge를 사용해 카테고리 이름 결합 (계획)
+    # value_counts 결과(Series)를 merge를 위해 DataFrame으로 변환
+    counts_to_merge_ddf = class_counts_ddf.to_frame(name='count')
+    # categories_df의 'id'와 counts_ddf의 인덱스(category_id)를 기준으로 merge
+    merged_ddf = counts_to_merge_ddf.merge(
+        categories_df,
+        left_index=True,
+        right_index=True
+    )
+
+    # 4. 실제 계산 실행 (시각화에 필요한 작은 데이터만 Pandas로 변환)
+    plot_df = merged_ddf.compute()
+    print("계산 완료.")
+
+    # 5. 시각화를 위해 데이터 정렬 및 인덱스 설정
+    plot_df = plot_df.set_index('name').sort_values('count', ascending=False)
+    
+    # 6. 시각화 (이후 로직은 이전과 거의 동일)
+    plot_height = max(8, len(plot_df) * 0.4)
+    fig, ax = plt.subplots(figsize=(12, plot_height))
+    
+    sns.barplot(x=plot_df['count'], y=plot_df.index, orient='h', palette='viridis', ax=ax)
+    
+    if x_log_scale:
+        ax.set_xscale('log')
+    
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel('Number of Annotations', fontsize=12)
+    ax.set_ylabel('Class Name', fontsize=12)
+
+    if show_counts:
+        for index, value in enumerate(plot_df['count']):
+            ax.text(value, index, f' {value}', va='center', fontsize=10)
+
+    fig.tight_layout()
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        print(f"Plot saved to {save_path}")
+        plt.close(fig)
+    else:
+        plt.show()
+        
+    return fig, ax
+
+def plot_top_bottom_classes(
+    annotations_ddf: dd.DataFrame,
+    categories_df: pd.DataFrame,
+    n_items: int = 20,
+    save_path: Optional[Path] = None
+):
+    """상위 N개와 하위 N개 클래스 분포를 함께 그립니다."""
+    # 1. Dask로 계산 계획 수립
+    class_counts = annotations_ddf['category_id'].value_counts()
+    top_n = class_counts.nlargest(n=n_items).to_frame(name='count')
+    bottom_n = class_counts.nsmallest(n=n_items).to_frame(name='count')
+    
+    top_merged = top_n.merge(categories_df, left_index=True, right_index=True)
+    bottom_merged = bottom_n.merge(categories_df, left_index=True, right_index=True)
+    
+    # 2. 실제 계산 실행
+    top_df, bottom_df = dask.compute(top_merged, bottom_merged)
+    print("계산 완료.")
+
+    # 3. 시각화
+    top_df = top_df.set_index('name').sort_values('count', ascending=False)
+    bottom_df = bottom_df.set_index('name').sort_values('count', ascending=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(20, max(8, n_items * 0.4)))
+    
+    sns.barplot(x=top_df['count'], y=top_df.index, palette='viridis', ax=axes[0])
+    axes[0].set_title(f'Top {n_items} Most Frequent Classes')
+    axes[0].set_xlabel('Number of Annotations')
+    
+    sns.barplot(x=bottom_df['count'], y=bottom_df.index, palette='viridis_r', ax=axes[1])
+    axes[1].set_title(f'Bottom {n_items} Least Frequent Classes')
+    axes[1].set_xlabel('Number of Annotations')
+    axes[1].yaxis.tick_right()
+    
+    fig.tight_layout()
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        print(f"Plot saved to {save_path}")
+        plt.close(fig)
+    else:
+        plt.show()
+    return fig, axes
+
+
+def plot_cumulative_class_distribution(
+    ddf: dd.DataFrame,
+    save_path: Optional[Path] = None
+):
+    """클래스 누적 분포 곡선을 그립니다."""
+    print("누적 분포 계산 중...")
+    class_counts = ddf['category_id'].value_counts().compute()
+    print("계산 완료.")
+
+    cumulative_dist = class_counts.cumsum() / class_counts.sum() * 100
+    
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.plot(np.arange(1, len(cumulative_dist) + 1), cumulative_dist.values)
+    
+    # 80% 지점 등 중요 지표 표시
+    classes_for_80_percent = (cumulative_dist < 80).sum() + 1
+    ax.axhline(80, color='r', linestyle='--', label='80% of Data')
+    ax.axvline(classes_for_80_percent, color='r', linestyle='--')
+    
+    ax.set_title('Cumulative Distribution of Annotations by Class')
+    ax.set_xlabel('Number of Classes (sorted by frequency)')
+    ax.set_ylabel('Cumulative Percentage of Annotations (%)')
+    ax.grid(True)
+    ax.legend()
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        print(f"Plot saved to {save_path}")
+        plt.close(fig)
+    else:
+        plt.show()
+    return fig, ax
+
+
+def calculate_dask_boxplot_stats(
+    ddf: dd.DataFrame,
+    categories_df: pd.DataFrame,
+    group_col: str = 'category_id',
+    value_col: str = 'area',
+    top_n: Optional[int] = None
+) -> pd.DataFrame:
+    """
+    Dask 데이터프레임에서 박스 플롯을 그리기 위한 통계치를 계산합니다.
+    
+    Args:
+        ...
+        top_n (int, optional): 상위 n개 카테고리만 선택합니다. 
+                               None으로 지정하면 전체 카테고리를 대상으로 계산합니다.
+    """
+    print(f"'{value_col}'에 대한 박스 플롯 통계치 계산을 시작합니다...")
+    
+    # top_n이 정수 값일 때만 필터링이 실행됩니다.
+    # None이면 이 블록을 건너뛰고 전체 ddf를 사용합니다.
+    if top_n:
+        top_categories = ddf[group_col].value_counts().nlargest(top_n).index.compute()
+        filtered_ddf = ddf[ddf[group_col].isin(top_categories)]
+    else:
+        print("전체 카테고리를 대상으로 계산합니다.")
+        filtered_ddf = ddf
+
+    # 2. Dask로 Quantile 계산
+    stats_series_ddf = filtered_ddf.groupby(group_col)[value_col].apply(
+        lambda x: x.quantile([0.25, 0.50, 0.75]),
+        meta=pd.Series(dtype='float64', name=value_col)
+    )
+    stats_series_pdf = stats_series_ddf.compute()
+    stats_pdf = stats_series_pdf.unstack().rename(columns={0.25: 'q1', 0.50: 'med', 0.75: 'q3'})
+
+    # 3. Whisker (수염) 계산
+    stats_pdf = pd.merge(stats_pdf, categories_df, left_index=True, right_on='id')
+    iqr = stats_pdf['q3'] - stats_pdf['q1']
+    stats_pdf['whislo'] = (stats_pdf['q1'] - 1.5 * iqr).clip(lower=0)
+    stats_pdf['whishi'] = stats_pdf['q3'] + 1.5 * iqr
+    
+    print("통계치 계산 완료.")
+    return stats_pdf
+
+def plot_boxplot_from_stats(
+    stats_df: pd.DataFrame,
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    xlog: bool = True,
+    save_path: Optional[Path] = None
+) -> tuple:
+    """
+    미리 계산된 통계치 데이터프레임으로 가로 방향의 박스 플롯을 그립니다.
+    """
+    print("박스 플롯 시각화 생성 중...")
+    
+    plot_stats = []
+    # 중앙값(med) 기준으로 정렬하여 보기 좋게 만듬
+    sorted_df = stats_df.sort_values('med', ascending=True) # 가로 방향이므로 오름차순으로 변경
+    
+    for _, row in sorted_df.iterrows():
+        plot_stats.append({
+            'label': row['name'],
+            'med': row['med'], 'q1': row['q1'], 'q3': row['q3'],
+            'whislo': row['whislo'], 'whishi': row['whishi'],
+            'fliers': []
+        })
+
+    # 1. 카테고리 수에 따라 그래프 높이를 동적으로 조절
+    num_categories = len(stats_df)
+    plot_height = max(10, num_categories * 0.3) # 카테고리당 0.3인치 할당 (최소 10인치)
+    
+    fig, ax = plt.subplots(figsize=(16, plot_height))
+    
+    # 2. vert=False 옵션으로 가로 박스 플롯 생성
+    ax.bxp(plot_stats, showfliers=False, vert=False, patch_artist=True)
+    
+    # 3. x축을 로그 스케일로 변경
+    if xlog:
+        ax.set_xscale('log')
+        
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel(xlabel, fontsize=12) # x 라벨
+    ax.set_ylabel(ylabel, fontsize=12) # y 라벨
+    ax.grid(True, axis='x', ls="--", linewidth=0.5) # x축에만 그리드 표시
+
+    fig.tight_layout()
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        print(f"Plot saved to {save_path}")
+        plt.close(fig)
+    else:
+        plt.show()
+        
+    return fig, ax
+
+def plot_dask_wh_scatter(
+    ddf: dd.DataFrame,
+    title: str,
+    sample_frac: float = 0.1, # 10%만 샘플링하여 사용 (데이터가 크면 더 줄이세요)
+    alpha: float = 0.3,
+    save_path: Optional[Path] = None
+) -> tuple:
+    """
+    Dask 데이터프레임의 너비(w)와 높이(h)를 2D 산점도(scatter plot)로 그립니다.
+    데이터가 클 경우 일부만 샘플링하여 시각화합니다.
+    """
+    print(f"전체 데이터의 {sample_frac*100:.0f}%를 샘플링하여 너비/높이 분포를 계산합니다...")
+    
+    # 1. 데이터 샘플링 및 계산
+    if sample_frac < 1.0:
+        sampled_ddf = ddf[['w', 'h']].sample(frac=sample_frac)
+    else:
+        sampled_ddf = ddf[['w', 'h']]
+    
+    plot_df = sampled_ddf.compute()
+    print("계산 완료.")
+
+    # 2. 시각화
+    fig, ax = plt.subplots(figsize=(10, 10))
+    sns.scatterplot(data=plot_df, x='w', y='h', alpha=alpha, ax=ax, edgecolor='none')
+    
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel('Width', fontsize=12)
+    ax.set_ylabel('Height', fontsize=12)
+    ax.grid(True, ls="--", linewidth=0.5)
+    
+    fig.tight_layout()
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        print(f"Plot saved to {save_path}")
+        plt.close(fig)
+    else:
+        plt.show()
     return fig, ax

@@ -185,63 +185,161 @@ def data_pipeline():
     #     save_path=save_path / 'figures/test_object_counts_dist.png'
     # )
 
-    # 1. Dask로 해상도 분석 실행
-    train_resolution_counts, train_resolution_stats, train_resolution_examples, train_max_res_image, train_min_res_image = plotting.analyze_image_resolutions(
-        ddf=train_data.images
+    # # 1. Dask로 해상도 분석 실행
+    # train_resolution_counts, train_resolution_stats, train_resolution_examples, train_max_res_image, train_min_res_image = plotting.analyze_image_resolutions(
+    #     ddf=train_data.images
+    # )
+
+    # # 2. 분석 결과 Markdown 리포트로 저장
+    # plotting.save_resolution_summary(
+    #     resolution_counts=train_resolution_counts,
+    #     resolution_stats=train_resolution_stats,
+    #     image_id_examples=train_resolution_examples,
+    #     max_area_image=train_max_res_image,
+    #     min_area_image=train_min_res_image,
+    #     output_path=save_path / 'analysis/train_resolution_summary.md'
+    # )
+
+    # # 3. 분석 결과 시각화
+    # plotting.plot_top_resolutions(
+    #     resolution_counts_series=train_resolution_counts,
+    #     title='Top 20 Most Common Image Resolutions (Train Data)',
+    #     n_items=20,
+    #     plot_top=True,
+    #     save_path=save_path / 'figures/train_top_resolutions.png'
+    # )
+    
+    # plotting.plot_top_resolutions(
+    #     resolution_counts_series=train_resolution_counts,
+    #     title='Bottom 20 Most Common Image Resolutions (Train Data)',
+    #     n_items=20,
+    #     plot_top=False,
+    #     save_path=save_path / 'figures/train_bottom_resolutions.png'
+    # )
+    
+    # test_resolution_counts, test_resolution_stats, test_resolution_examples, test_max_res_image, test_min_res_image = plotting.analyze_image_resolutions(
+    #     ddf=test_data.images
+    # )
+
+    # plotting.save_resolution_summary(
+    #     resolution_counts=test_resolution_counts,
+    #     resolution_stats=test_resolution_stats,
+    #     image_id_examples=test_resolution_examples,
+    #     max_area_image=test_max_res_image,
+    #     min_area_image=test_min_res_image,
+    #     output_path=save_path / 'analysis/test_resolution_summary.md'
+    # )
+
+    # plotting.plot_top_resolutions(
+    #     resolution_counts_series=test_resolution_counts,
+    #     title='Top 20 Most Common Image Resolutions (Test Data)',
+    #     n_items=20,
+    #     save_path=save_path / 'figures/test_top_resolutions.png'
+    # )
+    
+    # plotting.plot_top_resolutions(
+    #     resolution_counts_series=test_resolution_counts,
+    #     title='Bottom 20 Most Common Image Resolutions (Test Data)',
+    #     n_items=20,
+    #     save_path=save_path / 'figures/test_bottom_resolutions.png'
+    # )
+    
+    # train_imbalance_stats = plotting.analyze_class_imbalance(
+    #     ddf=train_data.annotations
+    # )
+    # test_imbalance_stats = plotting.analyze_class_imbalance(
+    #     ddf=test_data.annotations
+    # )
+    
+    # non_overlapping_classes = plotting.find_non_overlapping_classes(
+    #     train_ddf=train_data.annotations,
+    #     test_ddf=test_data.annotations,
+    #     categories_df=categories_df
+    # )
+    
+    # plotting.save_combined_imbalance_report(
+    #     train_stats=train_imbalance_stats,
+    #     test_stats=test_imbalance_stats,
+    #     non_overlapping_info=non_overlapping_classes,
+    #     output_path=save_path / 'analysis/combined_class_imbalance_summary.md'
+    # )
+    
+    # plotting.plot_class_distribution(
+    #     annotations_ddf=train_data.annotations,
+    #     categories_df=categories_df,
+    #     title='Class Distribution (All Categories)',
+    #     save_path=save_path / 'figures/train_class_distribution_all.png'
+    # )
+    
+    # plotting.plot_top_bottom_classes(
+    #     annotations_ddf=train_data.annotations,
+    #     categories_df=categories_df,
+    #     n_items=20,
+    #     save_path=save_path / 'figures/train_top_bottom_classes.png'
+    # )
+    
+    # plotting.plot_cumulative_class_distribution(
+    #     ddf=train_data.annotations,
+    #     save_path=save_path / 'figures/train_cumulative_class_distribution.png'
+    # )
+    
+    # plotting.plot_class_distribution(
+    #     annotations_ddf=test_data.annotations,
+    #     categories_df=categories_df,
+    #     title='Class Distribution (All Categories)',
+    #     save_path=save_path / 'figures/test_class_distribution_all.png'
+    # )
+    
+    # plotting.plot_top_bottom_classes(
+    #     annotations_ddf=test_data.annotations,
+    #     categories_df=categories_df,
+    #     n_items=20,
+    #     save_path=save_path / 'figures/test_top_bottom_classes.png'
+    # )
+    
+    # plotting.plot_cumulative_class_distribution(
+    #     ddf=test_data.annotations,
+    #     save_path=save_path / 'figures/test_cumulative_class_distribution.png'
+    # )
+    
+    # 1. 클래스별 면적 박스 플롯
+    train_stats_df = plotting.calculate_dask_boxplot_stats(
+        ddf=train_data.annotations,
+        categories_df=categories_df,
+    )
+    plotting.plot_boxplot_from_stats(
+        stats_df=train_stats_df,
+        title='Area Distribution by All Categories',
+        xlabel='Area (log scale)',
+        ylabel='Category Name',
+        save_path=save_path / 'figures/train_category_area_boxplot.png'
     )
 
-    # 2. 분석 결과 Markdown 리포트로 저장
-    plotting.save_resolution_summary(
-        resolution_counts=train_resolution_counts,
-        resolution_stats=train_resolution_stats,
-        image_id_examples=train_resolution_examples,
-        max_area_image=train_max_res_image,
-        min_area_image=train_min_res_image,
-        output_path=save_path / 'analysis/train_resolution_summary.md'
-    )
-
-    # 3. 분석 결과 시각화
-    plotting.plot_top_resolutions(
-        resolution_counts_series=train_resolution_counts,
-        title='Top 20 Most Common Image Resolutions (Train Data)',
-        n_items=20,
-        plot_top=True,
-        save_path=save_path / 'figures/train_top_resolutions.png'
+    # 2. 너비/높이 산점도
+    plotting.plot_dask_wh_scatter(
+        ddf=train_data.annotations,
+        title='Width vs Height Distribution of All Objects (10% Sample)',
+        sample_frac=0.1,
+        save_path=save_path / 'figures/train_wh_scatter.png'
     )
     
-    plotting.plot_top_resolutions(
-        resolution_counts_series=train_resolution_counts,
-        title='Bottom 20 Most Common Image Resolutions (Train Data)',
-        n_items=20,
-        plot_top=False,
-        save_path=save_path / 'figures/train_bottom_resolutions.png'
+    test_stats_df = plotting.calculate_dask_boxplot_stats(
+        ddf=test_data.annotations,
+        categories_df=categories_df,
     )
-    
-    test_resolution_counts, test_resolution_stats, test_resolution_examples, test_max_res_image, test_min_res_image = plotting.analyze_image_resolutions(
-        ddf=test_data.images
-    )
-
-    plotting.save_resolution_summary(
-        resolution_counts=test_resolution_counts,
-        resolution_stats=test_resolution_stats,
-        image_id_examples=test_resolution_examples,
-        max_area_image=test_max_res_image,
-        min_area_image=test_min_res_image,
-        output_path=save_path / 'analysis/test_resolution_summary.md'
+    plotting.plot_boxplot_from_stats(
+        stats_df=test_stats_df,
+        title='Area Distribution by All Categories',
+        xlabel='Area (log scale)',
+        ylabel='Category Name',
+        save_path=save_path / 'figures/test_category_area_boxplot.png'
     )
 
-    plotting.plot_top_resolutions(
-        resolution_counts_series=test_resolution_counts,
-        title='Top 20 Most Common Image Resolutions (Test Data)',
-        n_items=20,
-        save_path=save_path / 'figures/test_top_resolutions.png'
-    )
-    
-    plotting.plot_top_resolutions(
-        resolution_counts_series=test_resolution_counts,
-        title='Bottom 20 Most Common Image Resolutions (Test Data)',
-        n_items=20,
-        save_path=save_path / 'figures/test_bottom_resolutions.png'
+    plotting.plot_dask_wh_scatter(
+        ddf=train_data.annotations,
+        title='Width vs Height Distribution of All Objects (10% Sample)',
+        sample_frac=0.1,
+        save_path=save_path / 'figures/test_wh_scatter.png'
     )
     
     

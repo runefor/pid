@@ -4,8 +4,6 @@ import dask
 from dask import delayed
 from dask.diagnostics import ProgressBar
 
-# tqdm은 Dask의 ProgressBar와 함께 사용할 필요가 없으므로 import에서 제거했습니다.
-# pandas도 더 이상 필요하지 않아 제거했습니다.
 
 def load_and_modify_json(json_file_path):
     """

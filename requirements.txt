@@ -8,3 +8,8 @@ dask
 dask[distributed]
 bokeh
 tabulate
+lightning
+tensorboard
+torchmetrics
+pycocotools
+# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118

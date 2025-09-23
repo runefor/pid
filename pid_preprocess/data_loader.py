@@ -18,12 +18,8 @@ except ModuleNotFoundError:
     print(f"[Warning] Added '{project_root_path}' to sys.path for direct execution.")
     
     from pid_preprocess import schemas
-    
+    from utils.file_utils import load_json_data
 
-
-def load_json_data(path: Path) -> dict:
-    with path.open('r', encoding="utf-8") as f:
-        return json.load(f)
     
 def normalize_and_convert_info(data_part, meta_df: pd.DataFrame):
     """pd.json_normalize와 data_created를 datatime 타입으로 변환해주고, meta 스키마에 맞게 컬럼 순서와 타입을 적용한느 함수입니다."""
@@ -147,7 +143,7 @@ if __name__ == "__main__":
     
     data_path = base_dir / "assets"
     
-    train_data_loader = DataLoader(dataPath=data_path, jsonDir="../preprocessed_data_json", isLog=False)
+    train_data_loader = DataLoader(dataPath=data_path, jsonDir="preprocessed_data_json", isLog=False)
     
     train_data = train_data_loader.load_data("TL_prepro/TL_*_*/*.json")
     

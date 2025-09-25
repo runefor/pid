@@ -1,11 +1,14 @@
+from collections import defaultdict, Counter
 import json
 import random
 from pathlib import Path
-from collections import defaultdict, Counter
+import os
 import shutil
 from typing import Dict, List, Tuple, Union, Optional
 from enum import Enum
 import numpy as np
+import cv2
+import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
 
 
@@ -14,6 +17,11 @@ class SplitStrategy(Enum):
     DOMINANT_CATEGORY = "dominant_category"
     MULTI_LABEL = "multi_label"
     HYBRID = "hybrid"
+    ITERATIVE = "iterative"
+    ITERATIVE_BY_ANNOTATION = "iterative_by_annotation"
+    
+    def list():
+        return list(map(lambda c: c.value, SplitStrategy))
 
 
 class StratifiedDatasetSplitter:
@@ -24,6 +32,8 @@ class StratifiedDatasetSplitter:
     1. Dominant Category: 이미지당 가장 많은 어노테이션을 가진 카테고리 기준
     2. Multi-label: 모든 카테고리 조합을 고려한 정밀 분할
     3. Hybrid: Dominant + 소수 카테고리 보정
+    4. Iterative: 전체 분포 균형을 최적화하는 반복적 분할 (가장 강력)
+    5. Iterative by Annotation: 어노테이션 단위로 분할 (가장 정밀, 이미지 복제 발생)
     """
     
     def __init__(
@@ -120,6 +130,35 @@ class StratifiedDatasetSplitter:
         if self.data is None:
             self.load_data()
         
+        # --- 극소수 클래스 사전 분할 로직 ---
+        pre_splits = {"train": [], "val": [], "test": []}
+        pre_assigned_image_ids = set()
+
+        # 이미지가 2개인 클래스 찾기
+        for class_id, stats in self.class_stats.items():
+            if stats['appears_in_images'] == 2:
+                class_name = stats['name']
+                print(f"   Applying pre-split for rare class '{class_name}' with 2 images.")
+                
+                # 해당 클래스를 포함하는 이미지 2개 찾기
+                images_for_class = [
+                    img for img in self.valid_images 
+                    if any(ann['category_id'] == class_id for ann in self.img_to_anns[img['id']])
+                ]
+                
+                # 이미 할당된 이미지는 건너뛰기
+                images_to_assign = [img for img in images_for_class if img['id'] not in pre_assigned_image_ids]
+                if len(images_to_assign) == 2:
+                    random.shuffle(images_to_assign)
+                    pre_splits["train"].append(images_to_assign[0])
+                    pre_splits["val"].append(images_to_assign[1])
+                    pre_assigned_image_ids.add(images_to_assign[0]['id'])
+                    pre_assigned_image_ids.add(images_to_assign[1]['id'])
+
+        # 사전 할당된 이미지를 제외한 유효 이미지 목록 업데이트
+        original_valid_images = self.valid_images
+        self.valid_images = [img for img in self.valid_images if img['id'] not in pre_assigned_image_ids]
+
         print(f"\n🔄 Applying {self.strategy.value} strategy...")
         
         # 전략별 분할 실행
@@ -129,13 +168,25 @@ class StratifiedDatasetSplitter:
             splits = self._multi_label_split()
         elif self.strategy == SplitStrategy.HYBRID:
             splits = self._hybrid_split()
+        elif self.strategy == SplitStrategy.ITERATIVE:
+            splits = self._iterative_split()
+        elif self.strategy == SplitStrategy.ITERATIVE_BY_ANNOTATION:
+            return self._iterative_split_by_annotation()
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")
-        
+
+        # --- 사전 분할된 결과와 병합 ---
+        for split_name in splits:
+            splits[split_name].extend(pre_splits[split_name])
+
+        # valid_images를 원상태로 복구
+        self.valid_images = original_valid_images
+
         # 결과 저장 및 검증
-        stats = self._save_and_validate_splits(splits)
+        stats, _ = self._save_and_validate_splits(splits)
         
         return stats
+
     
     def _analyze_class_statistics(self):
         """클래스별 상세 통계 분석"""
@@ -187,7 +238,7 @@ class StratifiedDatasetSplitter:
             elif imbalance_ratio < 100:
                 recommended = "hybrid"
             else:
-                recommended = "multi_label"
+                recommended = "iterative_by_annotation" # 가장 강력한 iterative_by_annotation 추천
             
             if self.strategy.value != recommended:
                 print(f"💡 Recommended strategy for this dataset: {recommended}")
@@ -289,7 +340,183 @@ class StratifiedDatasetSplitter:
         
         # 3단계: 티어별로 다른 분할 전략 적용
         return self._split_by_tiers(class_to_images, class_tiers)
+
+    def _iterative_split(self) -> Dict[str, List[Dict]]:
+        """
+        반복적 계층화 분할 (Iterative Stratification)
+        전체 카테고리 분포를 최적화하여 이미지를 하나씩 할당합니다.
+        """
+        print("Using iterative stratification for optimal balance...")
+
+        # 1. 초기 설정
+        unassigned_images = self.valid_images.copy() # 사전 할당된 이미지가 제외된 리스트
+        random.shuffle(unassigned_images)
+        
+        # 이미지 ID -> 이미지 정보, 카테고리 Set 매핑
+        img_id_to_info = {img['id']: img for img in unassigned_images}
+        img_id_to_cats = {
+            img_id: frozenset(ann['category_id'] for ann in anns)
+            for img_id, anns in self.img_to_anns.items()
+        }
+
+        # 2. 목표 분포 계산 (어노테이션 수 기준)
+        target_dist = {
+            'train': self.train_ratio,
+            'val': self.val_ratio,
+            'test': self.test_ratio
+        }
+        target_ann_counts = defaultdict(lambda: defaultdict(float))
+        for cat_id, stats in self.class_stats.items():
+            total_anns = stats['total_annotations']
+            for split in target_dist:
+                target_ann_counts[cat_id][split] = total_anns * target_dist[split]
+
+        # 3. 현재 분할 상태 초기화
+        splits = {"train": [], "val": [], "test": []}
+        current_ann_counts = defaultdict(lambda: Counter())
+        
+        # 4. 이미지 반복 할당
+        pbar = range(len(unassigned_images))
+        for _ in pbar:
+            # 가장 희귀한 카테고리를 가진 이미지를 찾음
+            # (전체 데이터셋에서 가장 적게 나타나는 카테고리)
+            min_cat_count = float('inf')
+            best_img_id = -1
+            
+            # 아직 할당되지 않은 이미지 중에서 선택
+            unassigned_ids = list(img_id_to_info.keys())
+            if not unassigned_ids: break
+
+            for img_id in unassigned_ids:
+                cats_in_img = img_id_to_cats.get(img_id, set())
+                if not cats_in_img: continue
+                
+                # 이미지에 포함된 카테고리 중 가장 희귀한 카테고리의 등장 횟수
+                rarest_cat_count_in_img = min(self.class_stats[cat_id]['appears_in_images'] for cat_id in cats_in_img)
+                
+                if rarest_cat_count_in_img < min_cat_count:
+                    min_cat_count = rarest_cat_count_in_img
+                    best_img_id = img_id
+            
+            if best_img_id == -1: # 남은 이미지가 어노테이션이 없는 경우
+                best_img_id = unassigned_ids[0]
+
+            # 5. 최적의 split 찾기
+            # 이미지를 각 split에 추가했을 때 목표 분포와의 차이가 가장 적은 곳을 선택
+            best_split = ''
+            min_diff = float('inf')
+            
+            img_cats = img_id_to_cats.get(best_img_id, set())
+            
+            for split_name in splits.keys():
+                diff = 0
+                # 이 split에 이미지를 추가했을 때, 각 카테고리의 목표 달성률을 계산
+                for cat_id in img_cats:
+                    # 이 split에 있는 해당 카테고리의 현재 어노테이션 수
+                    current_ann_count = current_ann_counts[split_name].get(cat_id, 0)
+                    total_ann_for_cat = self.class_stats[cat_id]['total_annotations']
+                    
+                    # 이 split의 목표 어노테이션 수
+                    target_ratio = target_dist[split_name]
+                    target_ann_count_for_split = total_ann_for_cat * target_ratio
+                    
+                    # 목표 대비 현재 얼마나 채워졌는지 비율을 계산
+                    # 이 값이 작을수록 해당 split/category에 이미지가 더 필요하다는 의미
+                    # +1을 하여 0으로 나누는 것을 방지하고, 아직 할당되지 않은 경우를 처리
+                    fulfillment_ratio = (current_ann_count + 1) / (target_ann_count_for_split + 1)
+                    diff += fulfillment_ratio
+                
+                if diff < min_diff:
+                    min_diff = diff
+                    best_split = split_name
+
+            # 6. 이미지 할당 및 상태 업데이트
+            splits[best_split].append(img_id_to_info[best_img_id])
+            for cat_id in img_cats:
+                current_ann_counts[best_split][cat_id] += 1
+            del img_id_to_info[best_img_id]
+
+        return splits
     
+    def _iterative_split_by_annotation(self) -> Dict[str, Dict[str, int]]:
+        """
+        어노테이션 단위의 반복적 계층화 분할.
+        이미지를 복제하여 각 split에 필요한 어노테이션만 포함시킵니다.
+        """
+        print("Using iterative stratification by annotation (most precise)...")
+
+        # 1. 목표 비율 설정
+        target_dist = {
+            'train': self.train_ratio,
+            'val': self.val_ratio,
+            'test': self.test_ratio
+        }
+
+        # 2. 각 카테고리별로 어노테이션 분할
+        split_annotations = defaultdict(list)
+        cat_to_anns = defaultdict(list)
+        for ann in self.annotations:
+            cat_to_anns[ann['category_id']].append(ann)
+
+        for cat_id, anns in cat_to_anns.items():
+            random.shuffle(anns)
+            n_anns = len(anns)
+            n_train = int(n_anns * self.train_ratio)
+            n_val = int(n_anns * self.val_ratio)
+            
+            split_annotations['train'].extend(anns[:n_train])
+            split_annotations['val'].extend(anns[n_train:n_train + n_val])
+            split_annotations['test'].extend(anns[n_train + n_val:])
+
+        # 3. 분할된 어노테이션을 기반으로 최종 데이터 구조 생성 및 저장
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "annotations").mkdir(parents=True, exist_ok=True)
+        
+        stats = {}
+        img_id_map = {img['id']: img for img in self.images}
+
+        for split_name, anns in split_annotations.items():
+            if not anns:
+                continue
+
+            # 이 split에 포함된 이미지 ID 수집
+            image_ids_in_split = {ann['image_id'] for ann in anns}
+            split_images = [img_id_map[img_id] for img_id in image_ids_in_split if img_id in img_id_map]
+
+            # ID 재할당
+            split_images_copy = [img.copy() for img in split_images]
+            split_annotations_copy = [ann.copy() for ann in anns]
+            self._reassign_ids(split_images_copy, split_annotations_copy)
+
+            # JSON 저장
+            split_data = {
+                'info': self.data.get('info', {}),
+                'licenses': self.data.get('licenses', []),
+                'images': split_images_copy,
+                'annotations': split_annotations_copy,
+                'categories': self.categories
+            }
+            json_path = self.output_dir / "annotations" / f'{split_name}.json'
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(split_data, f, ensure_ascii=False, indent=2)
+
+            # 이미지 복사 (옵션)
+            if self.image_dir:
+                self._copy_images(split_images, self.output_dir / split_name)
+
+            # 통계 수집
+            stats[split_name] = {
+                'images': len(split_images_copy),
+                'annotations': len(split_annotations_copy),
+                'categories': dict(Counter(ann['category_id'] for ann in split_annotations_copy))
+            }
+            print(f"   {split_name}: {len(split_images_copy):,} images, {len(split_annotations_copy):,} annotations")
+
+        # 검증 리포트 생성
+        self._generate_validation_report(stats, self.output_dir / 'validation_report.md', {k: {ann['image_id'] for ann in v} for k, v in split_annotations.items()})
+        # 통계와 이미지 ID 셋을 함께 반환
+        return stats, {k: {ann['image_id'] for ann in v} for k, v in split_annotations.items()}
+
     def _classify_class_tiers(self, rare_threshold, very_rare_threshold):
         """클래스를 티어별로 분류"""
         tiers = {
@@ -341,7 +568,6 @@ class StratifiedDatasetSplitter:
     def _split_by_tiers(self, class_to_images, class_tiers):
         """티어별로 다른 전략으로 분할"""
         splits = {"train": [], "val": [], "test": []}
-        min_split_samples = self.strategy_params['min_samples_per_split']
         
         for tier_name, class_ids in class_tiers.items():
             for class_id in class_ids:
@@ -353,22 +579,28 @@ class StratifiedDatasetSplitter:
                 random.shuffle(images)
                 
                 if tier_name == 'very_rare':
-                    # 극소수: 대부분 train, 최소한의 val
-                    if n_images >= 3:
-                        splits["train"].extend(images[:-1])
-                        splits["val"].extend(images[-1:])
+                    if n_images >= self.strategy_params['min_samples_per_category']: # 기본값 3 이상
+                        # 3개일 경우: train 1, val 1, test 1
+                        # 4개일 경우: train 2, val 1, test 1
+                        # 5개일 경우: train 3, val 1, test 1
+                        splits["test"].extend(images[:1])
+                        splits["val"].extend(images[1:2])
+                        splits["train"].extend(images[2:])
                     else:
+                        # 샘플 수가 부족하면 모두 train에 할당
                         splits["train"].extend(images)
                         
                 elif tier_name == 'rare':
-                    # 소수: 보수적 분할 (80:15:5)
-                    if n_images >= min_split_samples * 3:
-                        n_train = max(min_split_samples, int(n_images * 0.8))
-                        n_val = max(1, int(n_images * 0.15))
+                    # 소수: 최소 샘플 수를 만족하면 보수적 분할, 아니면 모두 train
+                    if n_images >= self.strategy_params['min_samples_per_category']: # 기본값 3 이상
+                        # 보수적 분할 (예: 80:10:10) 시도, 각 split에 최소 1개 보장
+                        n_val = max(1, int(n_images * 0.1))
+                        n_test = max(1, int(n_images * 0.1))
+                        n_train = n_images - n_val - n_test
                         
-                        splits["train"].extend(images[:n_train])
-                        splits["val"].extend(images[n_train:n_train + n_val])
-                        splits["test"].extend(images[n_train + n_val:])
+                        splits["test"].extend(images[:n_test])
+                        splits["val"].extend(images[n_test:n_test + n_val])
+                        splits["train"].extend(images[n_test + n_val:])
                     else:
                         splits["train"].extend(images)
                         
@@ -385,10 +617,11 @@ class StratifiedDatasetSplitter:
     
     def _save_and_validate_splits(self, splits):
         """분할 결과 저장 및 검증"""
-        self.output_dir.mkdir(exist_ok=True)
-        (self.output_dir / "annotations").mkdir(exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "annotations").mkdir(parents=True, exist_ok=True)
         
         stats = {}
+        all_split_image_ids = defaultdict(set)
         
         for split_name, split_images in splits.items():
             if not split_images:
@@ -398,6 +631,7 @@ class StratifiedDatasetSplitter:
             split_annotations = []
             for img in split_images:
                 split_annotations.extend(self.img_to_anns[img['id']])
+                all_split_image_ids[split_name].add(img['id'])
             
             # ID 재할당
             split_images_copy = [img.copy() for img in split_images]
@@ -437,11 +671,12 @@ class StratifiedDatasetSplitter:
                   f"{len(split_annotations_copy):,} annotations")
         
         # 검증 리포트 생성
-        self._generate_validation_report(stats)
+        report_path = self.output_dir / 'validation_report.md'
+        self._generate_validation_report(stats, report_path, all_split_image_ids)
         
         print(f"\n✅ Split completed! Results saved to: {self.output_dir}")
-        
-        return stats
+        print(f"   📊 Validation report saved to: {report_path}")
+        return stats, all_split_image_ids
     
     def _reassign_ids(self, images, annotations):
         """ID 재할당"""
@@ -474,55 +709,217 @@ class StratifiedDatasetSplitter:
         
         print(f"   Copied {copied}/{len(images)} images")
     
-    def _generate_validation_report(self, stats):
-        """검증 리포트 생성"""
-        print(f"\n" + "="*50)
-        print(f"📋 STRATIFIED SPLIT VALIDATION ({self.strategy.value.upper()})")
-        print("="*50)
-        
+    def _generate_validation_report(self, stats: Dict[str, Dict], report_path: Path, all_split_image_ids: Dict[str, set]):
+        """검증 리포트를 마크다운 파일로 생성"""
+        report_lines = []
+
+        report_lines.append(f"# 📋 Stratified Split Validation Report ({self.strategy.value.upper()})")
+        report_lines.append("\n")
+
         category_dict = {cat['id']: cat['name'] for cat in self.categories}
-        
+
         # 전체 통계
         total_images = sum(split_stats['images'] for split_stats in stats.values())
+        unique_image_ids = set.union(*all_split_image_ids.values()) if all_split_image_ids else set()
+        unique_images_count = len(unique_image_ids)
         total_annotations = sum(split_stats['annotations'] for split_stats in stats.values())
+        duplication_rate = (total_images / unique_images_count - 1) * 100 if unique_images_count > 0 else 0
+
+
+        if total_images == 0:
+            report_lines.append("No data to report.")
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(report_lines))
+            return
+
+        report_lines.append("## Overall Distribution\n")        
+        report_lines.append(f"- **Unique Images**: {unique_images_count:,}")
+        if duplication_rate > 0.1:
+            report_lines.append(f"- **Image Duplication Rate**: {duplication_rate:.1f}% (An image can appear in multiple splits)\n")
         
-        print(f"Overall Distribution:")
+        report_lines.append("| Split | Images | Image % | Annotations | Annotation % |")
+        report_lines.append("|:------|-------:|--------:|------------:|-------------:|")
         for split_name, split_stats in stats.items():
-            img_pct = split_stats['images'] / total_images * 100
-            ann_pct = split_stats['annotations'] / total_annotations * 100
-            print(f"  {split_name:5}: {split_stats['images']:5,} images ({img_pct:5.1f}%), "
-                  f"{split_stats['annotations']:6,} annotations ({ann_pct:5.1f}%)")
-        
+            # 이미지 %는 고유 이미지 수 대비로 계산해야 의미가 있음
+            img_pct = split_stats['images'] / unique_images_count * 100 if unique_images_count > 0 else 0
+            ann_pct = split_stats['annotations'] / total_annotations * 100 if total_annotations > 0 else 0
+            report_lines.append(f"| {split_name} | {split_stats['images']:,} | {img_pct:.1f}% | {split_stats['annotations']:,} | {ann_pct:.1f}% |")
+        report_lines.append("\n")
+
         # 카테고리별 분포 (상위 20개만)
-        print(f"\nTop 20 Categories Distribution:")
-        print(f"{'Category':<30} {'Train':>8} {'Val':>8} {'Test':>8} {'Total':>8}")
-        print("-" * 70)
-        
+        report_lines.append("## Category Distribution (All Categories by Total Annotations)\n")
+        report_lines.append("| Category | Train (Count) | Train (%) | Val (Count) | Val (%) | Test (Count) | Test (%) | Total |")
+        report_lines.append("|:---|---:|---:|---:|---:|---:|---:|---:|")
+
         # 전체 카테고리를 어노테이션 수 기준으로 정렬
         all_categories = set()
         for split_stats in stats.values():
             all_categories.update(split_stats['categories'].keys())
-        
-        category_totals = {}
-        for cat_id in all_categories:
-            total = sum(stats[split]['categories'].get(cat_id, 0) 
-                       for split in ['train', 'val', 'test'])
+
+        category_totals = defaultdict(int)
+        for cat_id in all_categories: # 모든 카테고리의 전체 어노테이션 수 계산
+            total = sum(stats.get(split, {}).get('categories', {}).get(cat_id, 0)
+                        for split in ['train', 'val', 'test'])
             category_totals[cat_id] = total
-        
+
         # 상위 20개 카테고리 출력
         sorted_categories = sorted(category_totals.items(), key=lambda x: x[1], reverse=True)
-        
-        for cat_id, total in sorted_categories[:20]:
-            cat_name = category_dict.get(cat_id, f'Unknown_{cat_id}')[:28]
+
+        for cat_id, total in sorted_categories:
+            cat_name = category_dict.get(cat_id, f'Unknown_{cat_id}')
             train_count = stats.get('train', {}).get('categories', {}).get(cat_id, 0)
             val_count = stats.get('val', {}).get('categories', {}).get(cat_id, 0)
             test_count = stats.get('test', {}).get('categories', {}).get(cat_id, 0)
-            
-            print(f"{cat_name:<30} {train_count:8,} {val_count:8,} {test_count:8,} {total:8,}")
-        
-        if len(sorted_categories) > 20:
-            print(f"... and {len(sorted_categories) - 20} more categories")
 
+            train_pct = (train_count / total * 100) if total > 0 else 0
+            val_pct = (val_count / total * 100) if total > 0 else 0
+            test_pct = (test_count / total * 100) if total > 0 else 0
+
+            report_lines.append(f"| {cat_name} | {train_count:,} | {train_pct:.1f}% | {val_count:,} | {val_pct:.1f}% | {test_count:,} | {test_pct:.1f}% | {total:,} |")
+
+        # 분포 품질 분석
+        self._add_distribution_quality_analysis(report_lines, stats, category_totals, category_dict)
+
+        # 문제 카테고리 분석 (Val/Test에 샘플이 거의 없는 경우)
+        problem_categories = []
+        # min_samples_threshold를 2로 설정하여 0, 1, 2개인 경우를 찾습니다.
+        min_samples_threshold = 2
+        for cat_id in all_categories:
+            val_count = stats.get('val', {}).get('categories', {}).get(cat_id, 0)
+            test_count = stats.get('test', {}).get('categories', {}).get(cat_id, 0)
+
+            if val_count <= min_samples_threshold or test_count <= min_samples_threshold:
+                train_count = stats.get('train', {}).get('categories', {}).get(cat_id, 0)
+                total = category_totals[cat_id]
+                problem_categories.append({
+                    'id': cat_id,
+                    'name': category_dict.get(cat_id, f'Unknown_{cat_id}'),
+                    'train': train_count,
+                    'val': val_count,
+                    'test': test_count,
+                    'total': total
+                })
+        
+        if problem_categories:
+            report_lines.append("\n## ⚠️ Problem Category Analysis (Low Samples in Val/Test)\n")
+            report_lines.append(f"Categories with **{min_samples_threshold} or fewer** samples in validation or test splits.\n")
+            report_lines.append("| Category | Train | Val | Test | Total |")
+            report_lines.append("|:---|---:|---:|---:|---:|")
+            # Val 샘플 수, Test 샘플 수, 전체 샘플 수 순으로 정렬
+            sorted_problem_cats = sorted(problem_categories, key=lambda x: (x['val'], x['test'], x['total']))
+            for cat in sorted_problem_cats:
+                report_lines.append(f"| {cat['name']} | {cat['train']:,} | **{cat['val']:,}** | **{cat['test']:,}** | {cat['total']:,} |")
+
+        # 파일 저장
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write("\n".join(report_lines))
+
+    def _add_distribution_quality_analysis(self, report_lines: list, stats: dict, category_totals: dict, category_dict: dict):
+        """분포 품질 분석 섹션을 리포트에 추가"""
+        target_ratios = {
+            'train': self.train_ratio,
+            'val': self.val_ratio,
+            'test': self.test_ratio
+        }
+
+        category_divergence = {}
+        for cat_id, total in category_totals.items():
+            if total == 0:
+                continue
+            
+            divergence = 0
+            for split_name, target_ratio in target_ratios.items():
+                actual_count = stats.get(split_name, {}).get('categories', {}).get(cat_id, 0)
+                actual_ratio = actual_count / total
+                # 목표 비율과의 절대적인 차이를 합산
+                divergence += abs(actual_ratio - target_ratio)
+            
+            category_divergence[cat_id] = divergence
+
+        # 편차 점수가 높은 순으로 정렬
+        sorted_divergence = sorted(category_divergence.items(), key=lambda x: x[1], reverse=True)
+
+        report_lines.append("\n## ⚠️ Distribution Quality Analysis (Top 10 Most Skewed Categories)\n")
+        report_lines.append("This section highlights categories whose distribution significantly deviates from the target ratio (e.g., 70:20:10).")
+        report_lines.append("**Divergence Score**: A measure of how far the actual distribution is from the target. Higher is worse. (Max: 2.0)\n")
+        report_lines.append("| Category | Train % | Val % | Test % | Divergence Score |")
+        report_lines.append("|:---|---:|---:|---:|---:|")
+
+        for cat_id, divergence_score in sorted_divergence[:10]:
+            total = category_totals[cat_id]
+            cat_name = category_dict.get(cat_id, f'Unknown_{cat_id}')
+            train_pct = (stats.get('train', {}).get('categories', {}).get(cat_id, 0) / total * 100) if total > 0 else 0
+            val_pct = (stats.get('val', {}).get('categories', {}).get(cat_id, 0) / total * 100) if total > 0 else 0
+            test_pct = (stats.get('test', {}).get('categories', {}).get(cat_id, 0) / total * 100) if total > 0 else 0
+
+            report_lines.append(f"| {cat_name} | {train_pct:.1f}% | {val_pct:.1f}% | {test_pct:.1f}% | **{divergence_score:.3f}** |")
+
+
+def analyze_rare_class_locality(
+    splitter: StratifiedDatasetSplitter,
+    output_dir: Union[str, Path],
+    num_examples_per_class: int = 3
+):
+    """
+    소수 카테고리의 지역성(locality)을 분석하고 시각화합니다.
+    각 소수/극소수 카테고리에 대해, 해당 어노테이션이 포함된 이미지를 찾아
+    그 분포를 시각화한 이미지 파일을 저장합니다.
+
+    Args:
+        splitter: 데이터가 로드된 StratifiedDatasetSplitter 인스턴스.
+        output_dir: 시각화 결과물을 저장할 디렉토리.
+        num_examples_per_class: 클래스당 시각화할 최대 이미지 예시 수.
+    """
+    if splitter.data is None:
+        splitter.load_data()
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n🔬 Analyzing locality of rare classes. Visualizations will be saved to: {output_dir}")
+
+    # 1. 소수/극소수 카테고리 식별
+    rare_threshold = splitter.strategy_params['rare_threshold']
+    very_rare_threshold = splitter.strategy_params['very_rare_threshold']
+    class_tiers = splitter._classify_class_tiers(rare_threshold, very_rare_threshold)
+    rare_class_ids = class_tiers['rare'] + class_tiers['very_rare']
+
+    if not rare_class_ids:
+        print("   No rare classes found to analyze.")
+        return
+
+    category_dict = {cat['id']: cat['name'] for cat in splitter.categories}
+    image_map = {img['id']: img for img in splitter.images}
+
+    # 2. 각 소수 카테고리별로 이미지 내 분포 시각화
+    for class_id in rare_class_ids:
+        class_name_safe = category_dict.get(class_id, f"Unknown_{class_id}").replace("/", "_").replace("@", "_")
+        print(f"   Analyzing class: {class_name_safe} (ID: {class_id})")
+
+        # 해당 클래스를 포함하는 이미지와 어노테이션 정보 수집
+        images_with_class = []
+        for img_id, anns in splitter.img_to_anns.items():
+            class_anns = [ann for ann in anns if ann['category_id'] == class_id]
+            if class_anns:
+                images_with_class.append({
+                    'image_info': image_map[img_id],
+                    'annotations': class_anns,
+                    'count': len(class_anns)
+                })
+
+        if not images_with_class:
+            continue
+
+        # 어노테이션 개수가 많은 순으로 정렬
+        images_with_class.sort(key=lambda x: x['count'], reverse=True)
+
+        # 상위 예시 이미지 시각화
+        for i, item in enumerate(images_with_class[:num_examples_per_class]):
+            img_info = item['image_info']
+            # 이미지 파일명에서 경로를 제거하고 안전한 파일명으로 만듭니다.
+            base_filename = Path(img_info['file_name']).name
+            save_path = output_dir / f"{class_name_safe}_example_{i+1}_{base_filename}.png"
+            
+            _visualize_annotations_on_image(img_info, item['annotations'], class_name_safe, save_path)
 
 # 편의 함수들
 def create_splitter(
@@ -547,7 +944,7 @@ def quick_split(
     train_ratio: float = 0.7,
     val_ratio: float = 0.2,
     **kwargs
-) -> Dict[str, Dict[str, int]]:
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, set]]:
     """원샷 분할 함수"""
     splitter = create_splitter(
         input_json=input_json,
@@ -558,7 +955,16 @@ def quick_split(
         **kwargs
     )
     
-    return splitter.split()
+    # splitter.split()은 이제 (stats, image_ids) 튜플을 반환할 수 있음
+    result = splitter.split()
+    if isinstance(result, tuple) and len(result) == 2:
+        stats, image_ids = result
+    else: # 이전 버전 호환성
+        stats = result
+        image_ids = {} # ID 정보가 없는 경우 빈 딕셔너리
+
+    return stats, image_ids
+
 
 
 # 추가 유틸리티 함수들
@@ -569,50 +975,80 @@ def compare_strategies(
 ) -> Dict[str, Dict[str, Dict[str, int]]]:
     """여러 전략을 비교하는 함수"""
     if strategies is None:
-        strategies = ["dominant_category", "multi_label", "hybrid"]
+        strategies = SplitStrategy.list()
     
     results = {}
+    all_image_ids_by_strategy = {}
     output_base = Path(output_base_dir)
+    output_base.mkdir(parents=True, exist_ok=True)
     
     for strategy in strategies:
         print(f"\n🔄 Comparing strategy: {strategy}")
         try:
-            stats = quick_split(
+            stats, image_ids = quick_split(
                 input_json=input_json,
                 output_dir=output_base / strategy,
                 strategy=strategy
             )
             results[strategy] = stats
+            all_image_ids_by_strategy[strategy] = image_ids
             
         except Exception as e:
             print(f"❌ Error with {strategy}: {e}")
             results[strategy] = None
+            all_image_ids_by_strategy[strategy] = None
     
     # 비교 리포트 생성
-    _generate_comparison_report(results)
+    report_path = output_base / "comparison_report.md"
+    _generate_comparison_report(results, report_path, all_image_ids_by_strategy)
+    print(f"\n📊 Strategy comparison report saved to: {report_path}")
     return results
 
 
-def _generate_comparison_report(results):
-    """전략 비교 리포트 생성"""
-    print(f"\n" + "="*60)
-    print("📊 STRATEGY COMPARISON REPORT")
-    print("="*60)
-    
-    print(f"{'Strategy':<20} {'Train':<8} {'Val':<8} {'Test':<8} {'Total Ann.':<12}")
-    print("-" * 60)
+def _generate_comparison_report(results: Dict, output_path: Path, all_image_ids: Dict[str, Dict[str, set]]):
+    """전략 비교 리포트를 생성하고 마크다운 파일로 저장"""
+    report_lines = []
+    console_lines = []
+
+    # --- 콘솔용 헤더 ---
+    console_lines.append(f"\n" + "="*90)
+    console_lines.append("📊 STRATEGY COMPARISON REPORT")
+    console_lines.append("="*90)
+    console_lines.append(f"{'Strategy':<25} {'Train Imgs':<12} {'Val Imgs':<12} {'Test Imgs':<12} {'Unique Imgs':<13} {'Duplication':<12}")
+    console_lines.append("-" * 90)
+
+    # --- 마크다운용 헤더 ---
+    report_lines.append("# 📊 Strategy Comparison Report")
+    report_lines.append("")
+    report_lines.append("| Strategy | Train Images | Val Images | Test Images | Unique Images | Duplication |")
+    report_lines.append("|:---|---:|---:|---:|---:|---:|")
     
     for strategy, stats in results.items():
         if stats is None:
-            print(f"{strategy:<20} {'ERROR':<8} {'ERROR':<8} {'ERROR':<8} {'ERROR':<12}")
+            console_lines.append(f"{strategy:<25} {'ERROR':<12} {'ERROR':<12} {'ERROR':<12} {'ERROR':<15}")
+            report_lines.append(f"| {strategy} | ERROR | ERROR | ERROR | ERROR |")
             continue
             
         train_imgs = stats.get('train', {}).get('images', 0)
         val_imgs = stats.get('val', {}).get('images', 0) 
         test_imgs = stats.get('test', {}).get('images', 0)
-        total_ann = sum(split_data.get('annotations', 0) for split_data in stats.values())
         
-        print(f"{strategy:<20} {train_imgs:<8,} {val_imgs:<8,} {test_imgs:<8,} {total_ann:<12,}")
+        image_ids = all_image_ids.get(strategy, {})
+        unique_image_ids = set.union(*image_ids.values()) if image_ids else set()
+        unique_imgs_count = len(unique_image_ids)
+        total_imgs = train_imgs + val_imgs + test_imgs
+        duplication_rate = (total_imgs / unique_imgs_count - 1) * 100 if unique_imgs_count > 0 else 0
+        duplication_str = f"{duplication_rate:.1f}%"
+
+        console_lines.append(f"{strategy:<25} {train_imgs:<12,} {val_imgs:<12,} {test_imgs:<12,} {unique_imgs_count:<13,} {duplication_str:<12}")
+        report_lines.append(f"| {strategy} | {train_imgs:,} | {val_imgs:,} | {test_imgs:,} | {unique_imgs_count:,} | {duplication_str} |")
+
+    # 콘솔에 출력
+    print("\n".join(console_lines))
+
+    # 파일에 저장
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(report_lines))
 
 
 def analyze_dataset_characteristics(input_json: Union[str, Path]) -> Dict:
@@ -671,8 +1107,8 @@ def analyze_dataset_characteristics(input_json: Union[str, Path]) -> Dict:
         recommended_strategy = "hybrid" 
         reason = "Moderate imbalance, hybrid approach optimal"
     else:
-        recommended_strategy = "multi_label"
-        reason = "High imbalance, precise distribution needed"
+        recommended_strategy = "iterative_by_annotation"
+        reason = "High imbalance or complex co-occurrence, iterative_by_annotation approach recommended for best balance"
     
     characteristics['recommended_strategy'] = recommended_strategy
     characteristics['recommendation_reason'] = reason
@@ -720,46 +1156,83 @@ def validate_split_quality(stats: Dict[str, Dict[str, int]],
     return quality_check
 
 
+def _visualize_annotations_on_image(image_info: Dict, annotations: List[Dict], title: str, save_path: Path):
+    """이미지 위에 어노테이션을 그리고 저장하는 내부 함수"""
+    # 이 함수는 외부 이미지 파일 경로에 의존하지 않고, image_info의 width/height로 빈 이미지를 생성합니다.
+    # 실제 이미지 파일을 로드하려면 image_dir 경로가 필요합니다. 여기서는 분포만 시각화합니다.
+    try:
+        width = image_info['width']
+        height = image_info['height']
+        # 흰색 배경의 빈 이미지 생성
+        image = np.ones((height, width, 3), dtype=np.uint8) * 255
+
+        for ann in annotations:
+            bbox = ann['bbox']
+            x, y, w, h = [int(c) for c in bbox]
+            # 빨간색 사각형으로 바운딩 박스 그리기
+            cv2.rectangle(image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+        plt.figure(figsize=(16, 12))
+        plt.imshow(image)
+        plt.title(f"Distribution of '{title}' in {image_info['file_name']} ({len(annotations)} instances)")
+        plt.axis('off')
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+    except Exception as e:
+        print(f"      ❌ Failed to visualize for {image_info['file_name']}: {e}")
+
 if __name__ == "__main__":
-    # 🎯 실제 사용 예시들
+    print("Starting comprehensive dataset splitting examples...")
     
-    print("🚀 Starting comprehensive dataset splitting examples...")
+    base_dir = Path(os.getcwd()).resolve()
     
-    # 1. 데이터셋 특성 분석 및 추천
-    characteristics = analyze_dataset_characteristics("assets/merged_dataset.json")
+    data_path = base_dir / "assets"
+    
+    # 데이터셋 특성 분석 및 추천
+    characteristics = analyze_dataset_characteristics(data_path / "merged_dataset.json")
     recommended_strategy = characteristics['recommended_strategy']
-    
-    # 2. 추천 전략으로 분할
-    print(f"\n🎯 Using recommended strategy: {recommended_strategy}")
-    stats = quick_split(
-        input_json="assets/merged_dataset.json",
-        output_dir=f"assets/recommended_split_{recommended_strategy}",
-        strategy=recommended_strategy,
-        image_dir="assets/images"
-    )
-    
-    # 3. 품질 검증
-    quality = validate_split_quality(stats)
-    print(f"\n✅ Quality Check: {quality}")
-    
-    # 4. 여러 전략 비교 (선택적)
-    compare_all = input("\n🤔 Compare all strategies? (y/n): ").lower().strip() == 'y'
-    if compare_all:
-        comparison_results = compare_strategies(
-            input_json="assets/merged_dataset.json",
-            output_base_dir="assets/strategy_comparison"
+
+    # 소수 클래스 분포 시각화 분석
+    run_rare_class_analysis = input("\n🔬 Analyze rare class locality and visualize? (y/n): ").lower().strip() == 'y'
+    if run_rare_class_analysis:
+        # 분석을 위해 splitter 인스턴스 생성 및 데이터 로드
+        analysis_splitter = create_splitter(input_json=data_path / "merged_dataset.json", output_dir=data_path / "temp_for_analysis")
+        analyze_rare_class_locality(
+            splitter=analysis_splitter,
+            output_dir=data_path / "rare_class_analysis"
         )
     
-    print("\n🎉 All examples completed!")
+    # # 분할
+    # print(f"\nUsing recommended strategy: {recommended_strategy}")
+    # stats = quick_split(
+    #     input_json=data_path / "merged_dataset.json",
+    #     # output_dir=data_path / f"recommended_split_{recommended_strategy}",
+    #     output_dir=data_path / f"recommended_split_iterative_by_annotation",
+    #     # strategy=recommended_strategy,
+    #     strategy="iterative_by_annotation",
+    #     image_dir=None
+    # )
+    
+    # # 품질 검증
+    # quality = validate_split_quality(stats)
+    # print(f"Quality Check: {quality}")
+    
+    # 여러 전략 비교
+    comparison_results = compare_strategies(
+        input_json=data_path / "merged_dataset.json",
+        output_base_dir=data_path / "strategy_comparison"
+    )
+    
+    # print("\n🎉 All examples completed!")
     
     # 5. 사용자 맞춤형 설정 예시 (극심한 불균형용)
     if characteristics['imbalance_ratio'] > 100:
-        print(f"\nExtreme imbalance detected ({characteristics['imbalance_ratio']:.1f}:1)")
-        print("🔧 Creating custom split for extreme imbalance...")
+        print(f"Extreme imbalance detected ({characteristics['imbalance_ratio']:.1f}:1)")
+        print("Creating custom split for extreme imbalance...\n")
         
         custom_splitter = create_splitter(
-            input_json="assets/merged_dataset.json",
-            output_dir="assets/extreme_custom_split",
+            input_json=data_path / "merged_dataset.json",
+            output_dir=data_path / "extreme_custom_split",
             strategy="hybrid",
             train_ratio=0.8,  # 더 많이 train에 할당
             val_ratio=0.15
@@ -773,6 +1246,6 @@ if __name__ == "__main__":
         )
         
         custom_stats = custom_splitter.split()
-        print("✅ Custom extreme imbalance split completed!")
+        print("Custom extreme imbalance split completed!\n")
     
-    print(f"\n🏁 All dataset splitting operations completed successfully!")
+    print(f"All dataset splitting operations completed successfully!")

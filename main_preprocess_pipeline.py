@@ -13,7 +13,7 @@ from pid_preprocess import eda_runner
 from utils.file_utils import load_json_data
 
 
-def data_pipeline():
+def data_pipeline() -> None:
     print("data pipeline start")
     
     base_dir = Path(os.getcwd()).resolve()
@@ -45,7 +45,7 @@ def data_pipeline():
     
     eda_runner.run_train_test_comparison(train_data, test_data, categories_df, save_path)
 
-def test_visualize_class_distribution():
+def test_visualize_class_distribution() -> None:
     """
     merged_dataset.json 파일의 클래스 분포를 분석하고 시각화합니다.
     """
@@ -113,7 +113,7 @@ def test_visualize_class_distribution():
     plt.savefig(save_file)
     print(f"   ✅ Visualization saved to: {save_file}")
 
-def test_visualize_rare_class_locality():
+def test_visualize_rare_class_locality() -> None:
     """
     어노테이션이 100개 이하인 소수 클래스들이
     소수의 이미지에 집중되어 있는지, 여러 이미지에 흩어져 있는지 분석하고 시각화합니다.
@@ -198,7 +198,7 @@ def test_visualize_rare_class_locality():
     plt.savefig(save_file)
     print(f"   ✅ Visualization saved to: {save_file}")
 
-def test_report_rare_class_image_distribution():
+def test_report_rare_class_image_distribution() -> None:
     """
     100개 이하의 어노테이션을 가진 소수 클래스 각각이
     어떤 이미지에 몇 개의 어노테이션으로 존재하는지 상세 리포트를 생성합니다.

@@ -3,15 +3,26 @@
 <head>
   <title>P&ID 라벨링 툴</title>
   <link rel="stylesheet" href="/static/style.css">
-</head>
-<script src="/static/canvas.js"></script>
-<body>
+</head><body>
   <h2>P&ID 도면 라벨링</h2>
 
-  <label for="fileSelector">이미지 파일 선택:</label>
-  <select id="fileSelector" size="10" style="width: 300px;"
-    <option value="">-- 파일 선택 --</option>
-  </select>
+  <div class="controls">
+    <div class="filter-group">
+      <label for="searchBox">파일명 검색:</label>
+      <input type="text" id="searchBox" placeholder="파일명을 입력하세요...">
+    </div>
+    <div class="filter-group">
+      <label for="majorCategorySelector">대분류:</label>
+      <select id="majorCategorySelector"></select>
+      <label for="minorCategorySelector">소분류:</label>
+      <select id="minorCategorySelector"></select>
+    </div>
+    <div class="filter-group">
+      <label for="fileSelector">이미지 파일 선택 (<span id="fileCount">0</span>개):</label>
+      <select id="fileSelector" size="10">
+      </select>
+    </div>
+  </div>
 
   <div id="canvasContainer"></div>
 
@@ -20,25 +31,109 @@
 
   <script src="/static/canvas.js"></script>
   <script>
+    let allFiles = [];
+    let allCategories = {}; // { major: [minor1, minor2], ... }
+
     // 이미지 파일 목록 불러오기
     fetch('/file-list')
       .then(res => res.json())
       .then(files => {
-        const selector = document.getElementById('fileSelector');
-        files.forEach(file => {
-          const option = document.createElement('option');
-          option.value = JSON.stringify(file); // 전체 정보 저장
-          option.textContent = `${file.folder} / ${file.filename}`;
-          selector.appendChild(option);
+        allFiles = files;
+        populateCategoryFilters(files);
+        filterAndDisplayFiles();
+      });
+
+    function populateCategoryFilters(files) {
+      const majorSelector = document.getElementById('majorCategorySelector');
+      const minorSelector = document.getElementById('minorCategorySelector');
+      const majors = new Set();
+
+      files.forEach(file => {
+        (file.categories || []).forEach(catName => {
+          const [major, minor] = catName.split('@');
+          majors.add(major);
+          if (!allCategories[major]) {
+            allCategories[major] = new Set();
+          }
+          allCategories[major].add(minor);
         });
       });
 
-    // 파일 선택 시 이미지 로딩
+      majorSelector.innerHTML = '<option value="">-- 전체 --</option>';
+      Array.from(majors).sort().forEach(major => {
+        majorSelector.add(new Option(major, major));
+      });
+
+      majorSelector.addEventListener('change', () => {
+        const selectedMajor = majorSelector.value;
+        minorSelector.innerHTML = '<option value="">-- 전체 --</option>';
+        if (selectedMajor && allCategories[selectedMajor]) {
+          Array.from(allCategories[selectedMajor]).sort().forEach(minor => {
+            minorSelector.add(new Option(minor, minor));
+          });
+        }
+        filterAndDisplayFiles();
+      });
+
+      document.getElementById('searchBox').addEventListener('input', filterAndDisplayFiles);
+      minorSelector.addEventListener('change', filterAndDisplayFiles);
+    }
+
+    function filterAndDisplayFiles() {
+      const searchBox = document.getElementById('searchBox');
+      const majorSelector = document.getElementById('majorCategorySelector');
+      const minorSelector = document.getElementById('minorCategorySelector');
+      const fileSelector = document.getElementById('fileSelector');
+      const fileCountSpan = document.getElementById('fileCount');
+
+      const searchTerm = searchBox.value.toLowerCase();
+      const selectedMajor = majorSelector.value;
+      const selectedMinor = minorSelector.value;
+
+      const filteredFiles = allFiles.filter(file => {
+        // 1. 파일명 검색
+        const nameMatch = file.filename.toLowerCase().includes(searchTerm);
+
+        // 2. 카테고리 필터
+        let categoryMatch = true;
+        if (selectedMajor) {
+          if (selectedMinor) {
+            // 대분류와 소분류 모두 선택
+            const targetCategory = `${selectedMajor}@${selectedMinor}`;
+            categoryMatch = (file.categories || []).includes(targetCategory);
+          } else {
+            // 대분류만 선택
+            categoryMatch = (file.categories || []).some(c => c.startsWith(selectedMajor + '@'));
+          }
+        }
+
+        return nameMatch && categoryMatch;
+      });
+
+      fileSelector.innerHTML = '';
+      if (filteredFiles.length === 0) {
+        fileSelector.add(new Option('-- 일치하는 파일 없음 --', '', true, true));
+      } else {
+        filteredFiles.forEach(file => {
+          const option = document.createElement('option');
+          option.value = JSON.stringify(file);
+          option.textContent = `${file.folder} / ${file.filename}`;
+          fileSelector.appendChild(option);
+        });
+      }
+      fileCountSpan.textContent = filteredFiles.length;
+    }
+
+    // --- 기존 코드 ---
+    // 파일 선택 시 캔버스 초기화
     document.getElementById('fileSelector').addEventListener('change', e => {
       const fileData = e.target.value;
       if (!fileData) return;
 
       const { image, label, folder, filename } = JSON.parse(fileData);
+      // 현재 선택된 파일 정보를 window 객체에 저장하여 saveAnnotations에서 사용
+      window.currentFile = { folder, filename };
+
       const canvasId = `canvas_${folder}_${filename.replace('.png', '')}`;
       const container = document.getElementById('canvasContainer');
       container.innerHTML = ''; // 기존 캔버스 제거
@@ -49,7 +144,7 @@
       canvas.height = 700;
       container.appendChild(canvas);
 
-      initCanvas(canvasId, `/assets/${image}`, label);
+      initCanvas(canvasId, image, label);
     });
   </script>
 </body>

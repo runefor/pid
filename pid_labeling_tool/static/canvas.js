@@ -112,7 +112,8 @@ function initCanvas(canvasId, imagePath, labelPath) {
     }
   };
 
-  image.src = imagePath;
+  // imagePath는 'TS/...' 와 같은 상대 경로이므로, '/assets/'를 앞에 붙여 완전한 URL로 만듭니다.
+  image.src = `/assets/${imagePath}`;
 
   canvas.addEventListener('mousedown', e => {
     if (e.button === 2) {
@@ -222,10 +223,18 @@ function drawBoxes(state) {
 }
 
 function saveAnnotations() {
+  // index.html에서 저장한 현재 파일 정보를 가져옴
+  const currentFile = window.currentFile;
+  if (!currentFile) {
+    alert("저장할 파일이 선택되지 않았습니다.");
+    return;
+  }
+
   fetch('/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(coco)
+    // coco 데이터와 함께 파일 정보를 보냄
+    body: JSON.stringify({ ...coco, ...currentFile })
   }).then(res => res.json())
     .then(data => alert("COCO 형식으로 저장 완료!"));
 }

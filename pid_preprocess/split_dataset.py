@@ -858,6 +858,7 @@ class StratifiedDatasetSplitter:
 def analyze_rare_class_locality(
     splitter: StratifiedDatasetSplitter,
     output_dir: Union[str, Path],
+    source_dirs: List[Union[str, Path]],
     num_examples_per_class: int = 3
 ):
     """
@@ -868,6 +869,7 @@ def analyze_rare_class_locality(
     Args:
         splitter: 데이터가 로드된 StratifiedDatasetSplitter 인스턴스.
         output_dir: 시각화 결과물을 저장할 디렉토리.
+        source_dirs: 원본 이미지 파일이 있는 디렉토리 목록.
         num_examples_per_class: 클래스당 시각화할 최대 이미지 예시 수.
     """
     if splitter.data is None:
@@ -889,6 +891,16 @@ def analyze_rare_class_locality(
 
     category_dict = {cat['id']: cat['name'] for cat in splitter.categories}
     image_map = {img['id']: img for img in splitter.images}
+
+    # 원본 이미지 경로를 빠르게 찾기 위한 매핑 생성
+    print("   Scanning source image directories...")
+    image_path_map = {}
+    for s_dir in source_dirs:
+        s_dir = Path(s_dir)
+        if not s_dir.exists(): continue
+        for img_path in s_dir.rglob('*.png'):
+            image_path_map[img_path.name] = img_path
+    print(f"   Found {len(image_path_map)} unique source images.")
 
     # 2. 각 소수 카테고리별로 이미지 내 분포 시각화
     for class_id in rare_class_ids:
@@ -919,7 +931,9 @@ def analyze_rare_class_locality(
             base_filename = Path(img_info['file_name']).name
             save_path = output_dir / f"{class_name_safe}_example_{i+1}_{base_filename}.png"
             
-            _visualize_annotations_on_image(img_info, item['annotations'], class_name_safe, save_path)
+            # 원본 이미지 경로를 함께 전달
+            source_image_path = image_path_map.get(base_filename)
+            _visualize_annotations_on_image(img_info, item['annotations'], class_name_safe, save_path, source_image_path)
 
 # 편의 함수들
 def create_splitter(
@@ -1156,15 +1170,25 @@ def validate_split_quality(stats: Dict[str, Dict[str, int]],
     return quality_check
 
 
-def _visualize_annotations_on_image(image_info: Dict, annotations: List[Dict], title: str, save_path: Path):
+def _visualize_annotations_on_image(
+    image_info: Dict,
+    annotations: List[Dict],
+    title: str,
+    save_path: Path,
+    source_image_path: Optional[Path] = None
+):
     """이미지 위에 어노테이션을 그리고 저장하는 내부 함수"""
-    # 이 함수는 외부 이미지 파일 경로에 의존하지 않고, image_info의 width/height로 빈 이미지를 생성합니다.
-    # 실제 이미지 파일을 로드하려면 image_dir 경로가 필요합니다. 여기서는 분포만 시각화합니다.
     try:
-        width = image_info['width']
-        height = image_info['height']
-        # 흰색 배경의 빈 이미지 생성
-        image = np.ones((height, width, 3), dtype=np.uint8) * 255
+        # 원본 이미지 경로가 있으면 로드, 없으면 흰 배경 생성
+        if source_image_path and source_image_path.exists():
+            image = cv2.imread(str(source_image_path))
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            width = image_info['width']
+            height = image_info['height']
+            image = np.ones((height, width, 3), dtype=np.uint8) * 255
+            if not source_image_path:
+                print(f"      ⚠️ Source image not found for {image_info['file_name']}. Drawing on white background.")
 
         for ann in annotations:
             bbox = ann['bbox']
@@ -1192,6 +1216,12 @@ if __name__ == "__main__":
     characteristics = analyze_dataset_characteristics(data_path / "merged_dataset.json")
     recommended_strategy = characteristics['recommended_strategy']
 
+    # 원본 이미지가 있는 디렉토리 목록
+    source_directories = [
+        data_path / "TS",
+        data_path / "VS",
+    ]
+
     # 소수 클래스 분포 시각화 분석
     run_rare_class_analysis = input("\n🔬 Analyze rare class locality and visualize? (y/n): ").lower().strip() == 'y'
     if run_rare_class_analysis:
@@ -1199,7 +1229,8 @@ if __name__ == "__main__":
         analysis_splitter = create_splitter(input_json=data_path / "merged_dataset.json", output_dir=data_path / "temp_for_analysis")
         analyze_rare_class_locality(
             splitter=analysis_splitter,
-            output_dir=data_path / "rare_class_analysis"
+            output_dir=data_path / "rare_class_analysis",
+            source_dirs=source_directories
         )
     
     # # 분할

@@ -1,0 +1,49 @@
+# @package _global_
+
+# =======================================================
+#                   전역 설정
+# =======================================================
+seed: 42
+num_classes: 146
+
+# =======================================================
+#                   트레이너 기본 설정
+# =======================================================
+trainer:
+  _target_: lightning.Trainer
+  accelerator: "auto"
+  devices: "auto"
+  max_epochs: 1
+  precision: "16-mixed"
+
+# =======================================================
+#                   로거 기본 설정
+# =======================================================
+logging:
+  tensorboard:
+    _target_: lightning.pytorch.loggers.TensorBoardLogger
+    save_dir: "logs/"
+    name: "${models.model.model._target_}"
+    version: "${now:%Y-%m-%d_%H-%M-%S}"
+
+  mlflow:
+    _target_: lightning.pytorch.loggers.MLFlowLogger
+    experiment_name: "${models.model.model._target_}"
+    tracking_uri: "file:./mlruns"
+
+# =======================================================
+#                   데이터 로더 기본 설정
+# =======================================================
+loader_cfg:
+  train:
+    batch_size: 16 # 16이 최대임 이 이상은 cuda out of memory
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+    drop_last: true
+  val:
+    batch_size: 16
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+    drop_last: false

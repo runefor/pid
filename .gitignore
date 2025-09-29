@@ -2,3 +2,6 @@ assets/
 __pycache__/
 reports/
 *.png
+logs/
+mlruns/
+outputs/

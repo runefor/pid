@@ -1,0 +1,7 @@
+model:
+_target_: ocr.models.architecture.ObjectDetector
+model:
+  _target_: ocr.models.factory.create_efficientdet
+  num_classes: 146
+  pretrained: true
+  model_name: tf_efficientdet_d1 # d0, d1, d2

@@ -12,5 +12,7 @@ lightning
 tensorboard
 torchmetrics
 pycocotools
-timm 
-# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+albumentations
+timm
+hydra-core
+# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118mlflow>=1.0.0

@@ -1,0 +1,59 @@
+# 기본 설정들을 가져옴
+defaults:
+  - base.yaml
+  # --- 데이터셋 선택 ---
+  # - dataset: iterative
+  - dataset: tiled_iterative
+  # --- 모델 선택 ---
+  - models: faster_rcnn
+  - _self_
+
+# =======================================================
+#           이 파일에서 오버라이드할 설정
+# =======================================================
+
+# 1. 데이터 모듈 설정
+datamodule:
+  _target_: pid_train.datamodules.object_detection_dm.ObjectDetectionDataModule
+  dataset_cfg: ${dataset}
+  transform_cfg: ${transform_cfg}
+  loader_cfg: ${loader_cfg}
+
+# 2. 라이트닝 모듈 설정
+lit_module:
+  _target_: pid_train.lightning_modules.object_detection_pl.ObjectDetectionLitModule
+  model: ${models.model}
+  optimizer_cfg:
+    class: torch.optim.AdamW
+    lr: 0.0001
+  scheduler_cfg:
+    class: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 10000
+
+# 3. 트레이너 설정 (base.yaml 오버라이드)
+trainer:
+  max_epochs: 100
+
+# 4. 변환 설정 (지연된 초기화를 위해 _target_ -> class로 변경)
+transform_cfg:
+  class: albumentations.Compose
+  transforms:
+    - _target_: albumentations.Resize
+      height: 512
+      width: 512
+    - _target_: albumentations.HorizontalFlip
+      p: 0.5
+    - _target_: albumentations.Normalize
+      mean:
+        - 0.485
+        - 0.456
+        - 0.406
+      std:
+        - 0.229
+        - 0.224
+        - 0.225
+    - _target_: albumentations.pytorch.transforms.ToTensorV2
+  bbox_params:
+    _target_: albumentations.BboxParams
+    format: 'pascal_voc'
+    label_fields: ['labels']

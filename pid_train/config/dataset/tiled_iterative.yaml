@@ -1,0 +1,16 @@
+# Tiled-Training을 위한 데이터셋 설정
+train:
+  class: pid_train.datasets.tiled_coco_style_dataset.TiledCocoStyleDataset
+  # 데이터 경로
+  image_dir: "/home/rune/dev/pid/assets/image/all/images"
+  annotation_file: "/home/rune/dev/pid/assets/strategy_comparison/iterative/annotations/train.json"
+
+val:
+  class: pid_train.datasets.tiled_coco_style_dataset.TiledCocoStyleDataset
+  # 데이터 경로
+  image_dir: "/home/rune/dev/pid/assets/image/all/images"
+  annotation_file: "/home/rune/dev/pid/assets/strategy_comparison/iterative/annotations/val.json"
+
+# 타일링 관련 파라미터
+tile_size: 512
+overlap: 0.25

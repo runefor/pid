@@ -1,5 +1,6 @@
 import hydra
 import torch
+import effdet
 from lightning import LightningModule
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from omegaconf import DictConfig
@@ -20,9 +21,7 @@ class ObjectDetectionLitModule(LightningModule):
     ):
         super().__init__()
         
-        # torch.compile()이 현재 모델 구조와 호환성 문제가 있으므로 제거합니다.
         self.model = model
-        
         self.save_hyperparameters(ignore=['model']) 
 
         # 평가지표: mAP
@@ -30,9 +29,7 @@ class ObjectDetectionLitModule(LightningModule):
 
     def training_step(self, batch, batch_idx):
         images, targets = batch
-
         loss_dict = self.model(images, targets)
-
         total_loss = sum(loss for loss in loss_dict.values())
 
         self.log_dict(loss_dict, prog_bar=True)
@@ -43,7 +40,10 @@ class ObjectDetectionLitModule(LightningModule):
     def validation_step(self, batch, batch_idx):
         images, targets = batch
 
-        predictions = self.model(images)
+        if self.model.val_requires_targets:
+            predictions = self.model(images, targets)
+        else:
+            predictions = self.model(images)
 
         self.val_map.update(predictions, targets)
 

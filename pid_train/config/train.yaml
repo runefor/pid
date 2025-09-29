@@ -5,7 +5,7 @@ defaults:
   # - dataset: iterative
   - dataset: tiled_iterative
   # --- 모델 선택 ---
-  - models: faster_rcnn
+  - models: efficientdet
   - _self_
 
 # =======================================================

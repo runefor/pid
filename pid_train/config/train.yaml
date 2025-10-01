@@ -2,10 +2,10 @@
 defaults:
   - base.yaml
   # --- 데이터셋 선택 ---
-  # - dataset: iterative
-  - dataset: tiled_iterative
+  # - dataset: tiled_iterative
+  - dataset: config_torchvision
   # --- 모델 선택 ---
-  - models: efficientdet
+  - models: faster_rcnn
   - _self_
 
 # =======================================================
@@ -22,7 +22,7 @@ datamodule:
 # 2. 라이트닝 모듈 설정
 lit_module:
   _target_: pid_train.lightning_modules.object_detection_pl.ObjectDetectionLitModule
-  model: ${models.model}
+  model: ${models}
   optimizer_cfg:
     class: torch.optim.AdamW
     lr: 0.0001
@@ -36,7 +36,7 @@ trainer:
 
 # 4. 변환 설정 (지연된 초기화를 위해 _target_ -> class로 변경)
 transform_cfg:
-  class: albumentations.Compose
+  # class: albumentations.Compose
   transforms:
     - _target_: albumentations.Resize
       height: 512

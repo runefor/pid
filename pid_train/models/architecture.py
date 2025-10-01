@@ -1,25 +1,56 @@
+import torch
 import torch.nn as nn
 from .protocols import ObjectDetectionModelProtocol
 
-class ObjectDetector(nn.Module, ObjectDetectionModelProtocol):
+class ObjectDetector(nn.Module):
     """
-    실제 모델을 감싸는 Wrapper 클래스.
-    추가적인 속성이나 기능을 적용하기 용이합니다.
+    모델에 공통 기능(gradient checkpointing 등)을 추가하는 경량 wrapper
     """
-    def __init__(self, model: nn.Module, gradient_checkpointing: bool = False, val_requires_targets: bool = False):
+    def __init__(self, model: nn.Module, gradient_checkpointing: bool = False):
         super().__init__()
         self.model = model
-        self.gradient_checkpointing = gradient_checkpointing
-        self.val_requires_targets = val_requires_targets # 플래그 저장
+        
+        if gradient_checkpointing:
+            self._apply_gradient_checkpointing()
 
-        if self.gradient_checkpointing:
-            # PyTorch Lightning이 이 속성을 보고 그래디언트 체크포인팅을 활성화합니다.
-            # 복잡한 모델의 경우, 특정 부분(예: backbone)에만 적용해야 할 수도 있습니다.
-            try:
-                self.model.gradient_checkpointing = True
-                print("[INFO] Gradient Checkpointing enabled for the model.")
-            except Exception as e:
-                print(f"[WARNING] Could not apply gradient_checkpointing automatically: {e}")
+    def _apply_gradient_checkpointing(self):
+        """모델에 gradient checkpointing 적용"""
+        try:
+            # Torchvision 모델의 경우 backbone에 적용
+            if hasattr(self.model, 'backbone'):
+                if hasattr(self.model.backbone, 'body'):
+                    # ResNet 등
+                    for module in self.model.backbone.body.modules():
+                        if isinstance(module, nn.Sequential):
+                            module.gradient_checkpointing = True
+            
+            # 일반적인 경우
+            self.model.gradient_checkpointing = True
+            print("[INFO] Gradient Checkpointing enabled.")
+        except Exception as e:
+            print(f"[WARNING] Could not apply gradient_checkpointing: {e}")
 
     def forward(self, images, targets=None):
+        """모델 forward를 그대로 전달"""
         return self.model(images, targets)
+    
+
+class EfficientDetTrainWrapper(nn.Module):
+    """DetBenchTrain을 validation에서도 사용할 수 있도록 래핑"""
+    
+    def __init__(self, model_train):
+        super().__init__()
+        self.model = model_train
+        
+    def forward(self, images, targets=None):
+        if self.training:
+            # Training 모드: targets 필수
+            return self.model(images, targets)
+        else:
+            # Validation 모드: targets를 전달하되, 모델을 일시적으로 eval로 변경
+            # DetBenchTrain은 eval 모드에서는 loss를 계산하지 않고 predictions만 반환
+            self.model.eval()
+            with torch.no_grad():
+                # targets를 전달해야 하지만, eval 모드에서는 검증 없이 통과
+                output = self.model(images, targets)
+            return output

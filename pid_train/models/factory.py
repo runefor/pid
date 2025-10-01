@@ -1,63 +1,116 @@
-import timm
 import torch
 import torchvision
-import effdet
+import torchvision.models.detection as detection_models
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from omegaconf import OmegaConf
+from torchvision.models.detection.retinanet import RetinaNetClassificationHead
 
 from .protocols import ObjectDetectionModelProtocol
-from .architecture import ObjectDetector
+from .architecture import ObjectDetector, EfficientDetTrainWrapper
+from .base_wrapper import UnifiedDetectionModel
+from .adapters import TorchvisionAdapter, YOLOAdapter, EffDetAdapter
+
+
+def create_model(
+    framework: str,  # 'torchvision', 'yolo', 'mmdet'
+    model_name: str,
+    num_classes: int,
+    pretrained: bool = True,
+    gradient_checkpointing: bool = False,
+) -> UnifiedDetectionModel:
+    """프레임워크에 맞는 어댑터로 모델 생성"""
+    if framework == 'torchvision':
+        base_model = _create_torchvision_model(model_name, num_classes, pretrained, gradient_checkpointing)
+        return TorchvisionAdapter(base_model)
+    
+    elif framework == 'yolo':
+        base_model = _create_yolo_model(num_classes, pretrained, model_name, gradient_checkpointing)
+        return YOLOAdapter(base_model)
+    
+    # elif framework == 'mmdet':
+    #     base_model = _create_mmdet_model(model_name, num_classes, pretrained, **kwargs)
+    #     return MMDetAdapter(base_model, kwargs.get('cfg'))
+    
+    elif framework == 'effdet':
+        base_model = create_efficientdet(num_classes, pretrained, model_name, gradient_checkpointing)
+        return EffDetAdapter(base_model)
+    
+    else:
+        raise ValueError(f"Unknown framework: {framework}")
 
 # --- 팩토리 함수들 ---
 
-def create_faster_rcnn(num_classes, pretrained=True, gradient_checkpointing: bool = False, val_requires_targets: bool = False) -> ObjectDetectionModelProtocol:
+def _create_torchvision_model(model_name: str, num_classes: int, pretrained: bool = True, gradient_checkpointing: bool = False):
+    """Torchvision 모델들 - 각각 다른 처리 필요"""
+    
+    # 모델 타입별로 분기
+    if 'fasterrcnn' in model_name:
+        return create_faster_rcnn(num_classes, pretrained, model_name, gradient_checkpointing)
+    
+    elif 'retinanet' in model_name:
+        return create_retinanet(num_classes, pretrained, model_name, gradient_checkpointing)
+    
+    elif 'ssd' in model_name:
+        return create_ssd(num_classes, pretrained, model_name, gradient_checkpointing)
+    
+    # elif 'fcos' in model_name:
+    #     return create_fcos(num_classes, pretrained, model_name, **kwargs)
+    
+    else:
+        raise ValueError(f"Unknown torchvision model: {model_name}")
+
+def create_faster_rcnn(num_classes: int, pretrained=True, model_name: str = "fasterrcnn_resnet50_fpn", gradient_checkpointing: bool = False) -> ObjectDetectionModelProtocol:
     """
     Torchvision의 pre-trained Faster R-CNN 모델을 생성합니다.
     """
-    model_impl = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights='DEFAULT' if pretrained else None)
+    model_fn = getattr(detection_models, model_name)
+    model_impl: detection_models.FasterRCNN = model_fn(weights='DEFAULT' if pretrained else None)
 
     in_features = model_impl.roi_heads.box_predictor.cls_score.in_features
     model_impl.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
-    model = ObjectDetector(
-        model_impl, 
-        gradient_checkpointing=gradient_checkpointing, 
-        val_requires_targets=val_requires_targets
-    )
-    return model
-
-
-def create_efficientdet(num_classes, pretrained=True, model_name='tf_efficientdet_d0', gradient_checkpointing: bool = False, val_requires_targets: bool = False) -> ObjectDetectionModelProtocol:
-    """
-    effdet 라이브러리를 사용하여 전이 학습을 위한 EfficientDet 모델을 생성합니다.
-    """
-    # 1. 사전 학습된 모델을 원본 클래스 수 그대로 먼저 생성합니다.
-    model_impl = effdet.create_model(
-        model_name,
-        bench_task='train',
-        pretrained=pretrained,
-    )
-
-    # 2. 모델의 head(최종 분류기)를 우리의 클래스 수에 맞게 리셋합니다.
-    model_impl.model.reset_head(num_classes=num_classes)
-    
-    # 3. Gradient Checkpointing 설정
     if gradient_checkpointing:
-        # 모델의 내부 config는 읽기 전용이므로, 상태를 변경하고 다시 잠급니다.
-        OmegaConf.set_readonly(model_impl.model.config, False)
-        model_impl.model.config.act_checkpointing = True
-        OmegaConf.set_readonly(model_impl.model.config, True)
-        print("[INFO] Gradient Checkpointing enabled for EfficientDet.")
+        return ObjectDetector(model_impl, gradient_checkpointing=True)
+    return model_impl
 
-    # 일관성을 위해 ObjectDetector로 감싸서 반환
-    return ObjectDetector(
-        model_impl, 
-        gradient_checkpointing=False, # effdet 모델은 내부 config로 제어됨
-        val_requires_targets=val_requires_targets
+
+def create_retinanet(num_classes: int, pretrained=True, model_name: str = "retinanet_resnet50_fpn_v2", gradient_checkpointing: bool = False) -> ObjectDetectionModelProtocol:
+    """Torchvision의 pre-trained RetinaNet 모델을 생성합니다."""
+    
+    model_fn = getattr(detection_models, model_name)
+    
+    model_impl: detection_models.RetinaNet = model_fn(weights='DEFAULT' if pretrained else None)
+    
+    num_anchors = model_impl.head.classification_head.num_anchors
+    in_channels = model_impl.backbone.out_channels
+    
+    # Classification head 재생성
+    model_impl.head.classification_head = RetinaNetClassificationHead(
+        in_channels=in_channels,
+        num_anchors=num_anchors,
+        num_classes=num_classes,
     )
+    
+    if gradient_checkpointing:
+        return ObjectDetector(model_impl, gradient_checkpointing=True)
+    return model_impl
 
+def create_ssd(num_classes: int, pretrained=True, model_name: str = "ssdlite320_mobilenet_v3_large", gradient_checkpointing: bool = False) -> ObjectDetectionModelProtocol:
+    """
+    Torchvision의 pre-trained SSD 모델을 생성합니다.
+    """
+    # from torchvision.models.detection.ssd import SSDClassificationHead
+    model_fn = getattr(detection_models, model_name)
+    model_impl: detection_models.ssd.SSD = torchvision.models.detection.ssdlite320_mobilenet_v3_large(
+            weights='DEFAULT' if pretrained else None, 
+            num_classes=num_classes
+        )
+    
+    if gradient_checkpointing:
+        return ObjectDetector(model_impl, gradient_checkpointing=True)
+    
+    return model_impl
 
-def create_yolo(model_name='yolov5s', pretrained=True, gradient_checkpointing: bool = False, val_requires_targets: bool = False) -> ObjectDetectionModelProtocol:
+def _create_yolo_model(num_classes: int, pretrained=True, model_name='yolov5s', gradient_checkpointing: bool = False) -> ObjectDetectionModelProtocol:
     """
     PyTorch Hub를 통해 YOLOv5 모델을 로드합니다.
     """
@@ -66,9 +119,35 @@ def create_yolo(model_name='yolov5s', pretrained=True, gradient_checkpointing: b
         model_name,
         pretrained=pretrained
     )
-    model = ObjectDetector(
-        model_impl, 
-        gradient_checkpointing=gradient_checkpointing,
-        val_requires_targets=val_requires_targets
+
+    return model_impl
+
+
+
+
+# ==================================
+# 잘 동작하지 않는 모델들
+# ==================================
+
+# BUG: effdet 라이브러리 문제로 제대로 동작하지 않음.
+def create_efficientdet(num_classes: int, pretrained=True, model_name='tf_efficientdet_d0', gradient_checkpointing: bool = False):
+    """
+    effdet 라이브러리를 사용하여 전이 학습을 위한 EfficientDet 모델을 생성합니다.
+    """
+    import effdet
+    from omegaconf import OmegaConf
+    
+    model = effdet.create_model(
+        model_name,
+        bench_task='train',
+        pretrained=pretrained,
     )
+    model.model.reset_head(num_classes=num_classes)
+    
+    if gradient_checkpointing:
+        OmegaConf.set_readonly(model.model.config, False)
+        model.model.config.act_checkpointing = True
+        OmegaConf.set_readonly(model.model.config, True)
+        print("[INFO] Gradient Checkpointing enabled for EfficientDet.")
+
     return model

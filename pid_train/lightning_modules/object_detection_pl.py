@@ -5,7 +5,7 @@ from lightning import LightningModule
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from omegaconf import DictConfig
 
-from pid_train.models.architecture import ObjectDetector
+from pid_train.models.base_wrapper import UnifiedDetectionModel
 
 
 class ObjectDetectionLitModule(LightningModule):
@@ -15,7 +15,7 @@ class ObjectDetectionLitModule(LightningModule):
     """
     def __init__(
         self,
-        model: ObjectDetector,
+        model: UnifiedDetectionModel,
         optimizer_cfg: DictConfig,
         scheduler_cfg: DictConfig,
     ):
@@ -39,11 +39,8 @@ class ObjectDetectionLitModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, targets = batch
-
-        if self.model.val_requires_targets:
-            predictions = self.model(images, targets)
-        else:
-            predictions = self.model(images)
+        
+        predictions = self.model(images, targets)
 
         self.val_map.update(predictions, targets)
 

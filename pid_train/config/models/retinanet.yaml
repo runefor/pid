@@ -1,6 +1,6 @@
 _target_: pid_train.models.factory.create_model
 framework: torchvision
-model_name: "fasterrcnn_mobilenet_v3_large_fpn" # fasterrcnn_mobilenet_v3_large_fpn, fasterrcnn_resnet50_fpn
+model_name: "retinanet_resnet50_fpn_v2"
 num_classes: 146
 pretrained: true
 gradient_checkpointing: true

@@ -1,9 +1,16 @@
-model:
-  _target_: pid_train.models.architecture.ObjectDetector
-  model:
-    _target_: pid_train.models.factory.create_efficientdet
-    num_classes: 146
-    pretrained: true
-    model_name: "tf_efficientdet_d0"
-    gradient_checkpointing: true
-  val_requires_targets: true # 검증 시 targets 필요 여부 플래그
+# model:
+#   _target_: pid_train.models.architecture.ObjectDetector
+#   model:
+#     _target_: pid_train.models.factory.create_efficientdet
+#     num_classes: 146
+#     pretrained: true
+#     model_name: "tf_efficientdet_d0"
+#     gradient_checkpointing: true
+#   model_type: effdet
+
+_target_: pid_train.models.factory.create_model
+framework: effdet
+model_name: "tf_efficientdet_d0"
+num_classes: 146
+pretrained: true
+gradient_checkpointing: true

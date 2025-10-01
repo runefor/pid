@@ -23,12 +23,12 @@ logging:
   tensorboard:
     _target_: lightning.pytorch.loggers.TensorBoardLogger
     save_dir: "logs/"
-    name: "${models.model.model._target_}"
+    name: "${models.model_name}"
     version: "${now:%Y-%m-%d_%H-%M-%S}"
 
   mlflow:
     _target_: lightning.pytorch.loggers.MLFlowLogger
-    experiment_name: "${models.model.model._target_}"
+    experiment_name: "${models.model_name}"
     tracking_uri: "file:./mlruns"
 
 # =======================================================
@@ -36,7 +36,7 @@ logging:
 # =======================================================
 loader_cfg:
   train:
-    batch_size: 16 # 16이 최대임 이 이상은 cuda out of memory
+    batch_size: 8
     shuffle: true
     num_workers: 4
     pin_memory: true

@@ -4,7 +4,7 @@ import os
 import hydra
 from lightning import LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 
 @hydra.main(version_base=None, config_path="pkg://pid_train/config", config_name="train.yaml")

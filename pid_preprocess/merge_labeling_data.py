@@ -78,8 +78,8 @@ if __name__ == "__main__":
     data_path = base_dir / "assets"
     
     merge_per_image_jsons_to_coco(
-        json_dir=data_path / "preprocessed_data_json/VL_prepro",
+        json_dir=data_path / "preprocessed_data_json/TL_prepro",
         categories_file=data_path / "categories.json",
-        output_file=data_path / "merged_VL_prepro.json",
-        pattern="VL_*_*/*.json"
+        output_file=data_path / "merged_TL_prepro.json",
+        pattern="TL_*_*/*.json"
     )

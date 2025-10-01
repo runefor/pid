@@ -2,6 +2,7 @@ sahi
 opencv-python
 matplotlib
 seaborn
+numpy
 pandas
 # pyarrow # 이건 설치 안해도 될 것 같음.
 dask
@@ -15,5 +16,6 @@ pycocotools
 albumentations
 timm
 hydra-core
-# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118mlflow>=1.0.0
+# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 effdet
+mlflow

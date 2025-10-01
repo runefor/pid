@@ -104,11 +104,11 @@ def main_process(input_dir, output_dir, file_pattern):
 if __name__ == "__main__":
     # 원본 데이터가 있는 상위 경로
     # __file__은 스크립트 파일의 경로를 나타냅니다.
-    base_dir = Path(__file__).resolve().parent
-    INPUT_ROOT_DIR = base_dir / "../assets"
+    base_dir = Path(__file__).resolve().parent.parent
+    INPUT_ROOT_DIR = base_dir / "assets"
     
     # 전처리된 JSON 파일을 저장할 경로
-    OUTPUT_ROOT_DIR = './preprocessed_data_json' # 경로 이름 변경
+    OUTPUT_ROOT_DIR = INPUT_ROOT_DIR / 'preprocessed_data_json'
     
     # JSON 파일 검색 패턴
     # 예: 'TL/TL_V01_006/*.json' -> TL/TL_V01_006 폴더 안의 json만

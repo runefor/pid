@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-base_dir = Path(__file__).resolve().parent
-data_path = base_dir / Path("../assets")
+base_dir = Path(__file__).resolve().parent.parent
+data_path = base_dir / "assets"
 
 
 unique_categories = {}
@@ -27,7 +27,7 @@ for json_file in data_path.glob("TL/TL_*_*/*.json"):
 
 merged_categories = list(unique_categories.values())
 
-output_path = data_path / Path("../assets/categories.json")
+output_path = data_path / "categories.json"
 with output_path.open("w", encoding="utf-8") as f:
     json.dump(merged_categories, f, indent=2, ensure_ascii=False)
 

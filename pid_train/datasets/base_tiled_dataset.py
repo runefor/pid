@@ -5,9 +5,11 @@ from abc import ABC, abstractmethod
 
 import torch
 from PIL import Image
-from pycocotools.coco import COCO
+# from pycocotools.coco import COCO
 from torch.utils.data import Dataset
 import numpy as np
+
+from .custom_coco import COCO
 
 class BaseTiledDataset(Dataset, ABC):
     """

@@ -5,6 +5,7 @@ from typing import Union, List, Dict, Optional
 import json
 from collections import defaultdict
 import glob
+from tqdm import tqdm
 
 class ImagePathManager:
     """
@@ -42,7 +43,7 @@ class ImagePathManager:
                 
             # 재귀적으로 이미지 파일 찾기
             for pattern in ['**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.bmp']:
-                for img_path in source_dir.glob(pattern):
+                for img_path in tqdm(list(source_dir.glob(pattern)), desc=f"Scanning {pattern} in {source_dir.name}", unit="file"):
                     filename = img_path.name
                     
                     if filename in image_mapping:
@@ -94,7 +95,7 @@ class ImagePathManager:
             split_dir = self.output_dir / split_name
             copied_count = 0
             
-            for img_info in images:
+            for img_info in tqdm(images, desc=f"Organizing {split_name}", unit="image"):
                 filename = img_info['file_name']
                 
                 if filename not in image_mapping:
@@ -125,10 +126,8 @@ class ImagePathManager:
                 
                 # path_mapping 모드에서는 JSON에만 경로 저장 (실제 파일 이동 없음)
             
-            if self.mode in ['copy', 'symlink']:
-                print(f"   ✅ {copied_count:,}/{len(images):,} images processed")
-                if missing_files[split_name]:
-                    print(f"   ⚠️  {len(missing_files[split_name]):,} files missing")
+            if missing_files[split_name]:
+                print(f"   ⚠️  {len(missing_files[split_name]):,} files were missing in '{split_name}' split.")
         
         return dict(missing_files)
     

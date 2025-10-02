@@ -16,6 +16,7 @@ def create_model(
     num_classes: int,
     pretrained: bool = True,
     gradient_checkpointing: bool = False,
+    **kwargs,
 ) -> UnifiedDetectionModel:
     """프레임워크에 맞는 어댑터로 모델 생성"""
     if framework == 'torchvision':
@@ -26,13 +27,14 @@ def create_model(
         base_model = _create_yolo_model(num_classes, pretrained, model_name, gradient_checkpointing)
         return YOLOAdapter(base_model)
     
-    # elif framework == 'mmdet':
-    #     base_model = _create_mmdet_model(model_name, num_classes, pretrained, **kwargs)
-    #     return MMDetAdapter(base_model, kwargs.get('cfg'))
-    
     elif framework == 'effdet':
-        base_model = create_efficientdet(num_classes, pretrained, model_name, gradient_checkpointing)
-        return EffDetAdapter(base_model)
+        return EffDetAdapter(
+            model_name=model_name,
+            num_classes=num_classes,
+            pretrained=pretrained,
+            gradient_checkpointing=gradient_checkpointing, # 어댑터 내부에서 처리하도록 전달
+            **kwargs,
+        )
     
     else:
         raise ValueError(f"Unknown framework: {framework}")

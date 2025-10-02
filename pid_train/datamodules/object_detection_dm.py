@@ -52,6 +52,7 @@ class ObjectDetectionDataModule(LightningDataModule):
             transforms=transforms,
             tile_size=self.dataset_cfg.tile_size,
             overlap=self.dataset_cfg.overlap,
+            debug_image_count=self.dataset_cfg.debug_image_count,
         )
         
         self.val_dataset = val_dataset_class(
@@ -60,6 +61,7 @@ class ObjectDetectionDataModule(LightningDataModule):
             transforms=transforms,
             tile_size=self.dataset_cfg.tile_size,
             overlap=self.dataset_cfg.overlap,
+            debug_image_count=self.dataset_cfg.debug_image_count,
         )
 
     def train_dataloader(self):

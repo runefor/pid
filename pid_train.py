@@ -9,7 +9,7 @@ from pid_train.runners.train import main
 Image.MAX_IMAGE_PIXELS = None
 os.environ['HYDRA_FULL_ERROR'] = '1'
 os.environ['PROJECT_ROOT'] = os.getcwd()
-# os.environ['CUDA_LAUNCH_BLOCKING'] = "1" # TODO fasterrcnn_mobilenet_v3_large_fpn 이 모델 쓰면 중간에 터지던데, 특징 분류기의 shape이 올바른지 분석해봐야함.
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1" # TODO fasterrcnn_mobilenet_v3_large_fpn 이 모델 쓰면 중간에 터지던데, 특징 분류기의 shape이 올바른지 분석해봐야함.
 # torch.compile 최적화: 스칼라 출력을 캡처하여 그래프 중단(graph break) 방지
 # torch._dynamo.config.capture_scalar_outputs = True
 

@@ -23,6 +23,7 @@ class BaseTiledDataset(Dataset, ABC):
         transforms: Optional[Callable] = None,
         tile_size: int = 640,
         overlap: float = 0.2,
+        debug_image_count: Optional[int] = None,
     ):
         self.image_dir = image_dir
         self.transforms = transforms
@@ -33,10 +34,15 @@ class BaseTiledDataset(Dataset, ABC):
         self.coco = COCO(annotation_file)
         self.image_ids = list(sorted(self.coco.imgs.keys()))
 
+        if debug_image_count is not None:
+            print(f"[Tiled Dataset] DEBUG MODE: Using only {debug_image_count} images.")
+            self.image_ids = self.image_ids[:debug_image_count]
+
         coco_cat_ids = sorted(self.coco.getCatIds())
         self.coco_cat_id_to_contiguous_id = {
             coco_id: i + 1 for i, coco_id in enumerate(coco_cat_ids)
-        }
+        } 
+        
         self.num_classes = len(coco_cat_ids)
         print(f"[Tiled Dataset] 총 {self.num_classes}개의 클래스를 발견했습니다.")
 

@@ -32,7 +32,7 @@ lit_module:
 
 # 3. 트레이너 설정 (base.yaml 오버라이드)
 trainer:
-  max_epochs: 100
+  max_epochs: 2
 
 # 4. 변환 설정 (지연된 초기화를 위해 _target_ -> class로 변경)
 transform_cfg:

@@ -112,15 +112,16 @@ def create_ssd(num_classes: int, pretrained=True, model_name: str = "ssdlite320_
     
     return model_impl
 
-def _create_yolo_model(num_classes: int, pretrained=True, model_name='yolov5s', gradient_checkpointing: bool = False) -> ObjectDetectionModelProtocol:
+def _create_yolo_model(num_classes: int, pretrained=True, model_name='yolov8s.pt', gradient_checkpointing: bool = False) -> ObjectDetectionModelProtocol:
     """
-    PyTorch Hub를 통해 YOLOv5 모델을 로드합니다.
+    ultralytics 라이브러리를 통해 YOLOv8 모델을 로드합니다.
     """
-    model_impl = torch.hub.load(
-        'ultralytics/yolov5', 
-        model_name,
-        pretrained=pretrained
-    )
+    from ultralytics import YOLO
+    model_impl = YOLO(model_name)
+    
+    # 모델의 클래스 수를 업데이트해야 할 경우,
+    # 이 부분은 YOLO 모델의 구조에 따라 다를 수 있습니다.
+    # model_impl.model.yaml['nc'] = num_classes
 
     return model_impl
 

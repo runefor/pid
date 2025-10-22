@@ -6,6 +6,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+from PIL import Image
+from tqdm import tqdm
 
 from pid_preprocess.data_loader import DataLoader, setting_categories_data
 from pid_preprocess.feature_engineering import add_bbox_features
@@ -280,9 +282,75 @@ def test_report_rare_class_image_distribution() -> None:
     
     print(f"   ✅ Report saved to: {save_file}")
 
+def test_analyze_image_channels() -> None:
+    """
+    데이터셋의 모든 이미지 채널 수를 분석하고 결과를 Markdown 파일로 저장합니다.
+    """
+    print("🖼️  Starting image channel analysis...")
+
+    # --- 1. 경로 설정 ---
+    base_dir = Path(os.getcwd()).resolve()
+    data_path = base_dir / "assets"
+    report_path = base_dir / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+
+    # --- 2. 데이터 로드 ---
+    json_file_path = data_path / "merged_dataset.json"
+    if not json_file_path.exists():
+        print(f"❌ Error: File not found at {json_file_path}")
+        return
+
+    print(f"   Loading data from {json_file_path}...")
+    coco_data = load_json_data(json_file_path)
+    images_info = coco_data.get("images", [])
+
+    if not images_info:
+        print("   ⚠️ No image entries found in the JSON file.")
+        return
+
+    # --- 3. 이미지 채널 분석 ---
+    channel_counts = Counter()
+    problematic_files = []
+    
+    # 이미지 크기 제한 해제 (DecompressionBombError 방지)
+    Image.MAX_IMAGE_PIXELS = None
+
+    print(f"   Analyzing {len(images_info)} images...")
+    for img_info in tqdm(images_info, desc="Analyzing channels"):
+        image_path = data_path / "image/all/images" / img_info['file_name']
+        if not image_path.exists():
+            problematic_files.append(f"- {img_info['file_name']} (File not found)")
+            continue
+        
+        try:
+            with Image.open(image_path) as img:
+                channel_counts[img.mode] += 1
+        except Exception as e:
+            problematic_files.append(f"- {img_info['file_name']} (Error: {e})")
+
+    # --- 4. 리포트 생성 ---
+    report_lines = ["# Image Channel Analysis Report", ""]
+    report_lines.append("## 📊 Channel Distribution")
+    report_lines.append("| Channel Mode | Image Count |")
+    report_lines.append("|--------------|-------------|")
+    for mode, count in sorted(channel_counts.items()):
+        report_lines.append(f"| {mode} | {count:,} |")
+    
+    if problematic_files:
+        report_lines.append("\n## ⚠️ Problematic Files")
+        report_lines.extend(problematic_files)
+
+    # --- 5. 결과 저장 ---
+    save_file = report_path / "image_channel_analysis.md"
+    with open(save_file, 'w', encoding='utf-8') as f:
+        f.write("\n".join(report_lines))
+    
+    print(f"   ✅ Analysis report saved to: {save_file}")
+
 
 if __name__ == "__main__":
     # data_pipeline()
     # test_visualize_class_distribution()
     # test_visualize_rare_class_locality()
-    test_report_rare_class_image_distribution()
+    # test_report_rare_class_image_distribution()
+    test_analyze_image_channels()

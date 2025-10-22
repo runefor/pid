@@ -1,11 +1,8 @@
 # 기본 설정들을 가져옴
 defaults:
   - base.yaml
-  # --- 데이터셋 선택 ---
-  # - dataset: tiled_iterative
   - dataset: config_torchvision
-  # --- 모델 선택 ---
-  - models: faster_rcnn
+  - models: yolo
   - _self_
 
 # =======================================================
@@ -43,6 +40,9 @@ transform_cfg:
       width: 512
     - _target_: albumentations.HorizontalFlip
       p: 0.5
+    - _target_: albumentations.Rotater
+      limit: 90
+      p: 0.3
     - _target_: albumentations.Normalize
       mean:
         - 0.485

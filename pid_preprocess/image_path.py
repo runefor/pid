@@ -304,7 +304,7 @@ if __name__ == "__main__":
     
     # organize_dataset_images 함수 형식에 맞게 데이터를 래핑
     # 전체 데이터를 'all'이라는 이름의 단일 스플릿으로 취급
-    splits_for_organizing = {'all': merged_data}
+    # splits_for_organizing = {'all': merged_data}
     
     # 2. 원본 이미지 디렉토리들
     source_directories = [
@@ -312,14 +312,35 @@ if __name__ == "__main__":
         data_path / "VS",
     ]
     
-    # 3-A. 복사 모드 (권장)
-    print("🚀 Mode 1: Copying images...")
-    missing_copy = quick_copy_images(
-        coco_splits=splits_for_organizing,
-        source_dirs=source_directories, 
-        output_dir=data_path / "image"
-    )
+    # # 3-A. 복사 모드 (권장)
+    # print("🚀 Mode 1: Copying images...")
+    # missing_copy = quick_copy_images(
+    #     coco_splits=splits_for_organizing,
+    #     source_dirs=source_directories, 
+    #     output_dir=data_path / "image"
+    # )
     
+    # 4. designer_name 이미지만 별도로 복사
+    designer_name = "V01"
+    print(f"\n🚀 Mode 4: Copying '{designer_name}' images only...")
+    
+    # designer_name로 시작하는 이미지 정보만 필터링
+    v_images = [
+        img for img in merged_data.get('images', []) 
+        if img.get('file_name', '').startswith(designer_name)
+    ]
+    
+    if v_images:
+        # designer_name이라는 이름의 스플릿으로 데이터 구성
+        v01_split_data = {designer_name: {'images': v_images}}
+        
+        missing_v = quick_copy_images(
+            coco_splits=v01_split_data,
+            source_dirs=source_directories,
+            output_dir=data_path / "image"  # 'image/V01/images' 경로에 저장됨
+        )
+        print(f"   {designer_name} copy mode missing files: {sum(len(v) for v in missing_v.values())}")
+
     # 3-B. 심볼릭 링크 모드 (저장공간 절약)
     # print("\n🔗 Mode 2: Creating symbolic links...")
     # missing_symlink = quick_symlink_images(
@@ -337,6 +358,6 @@ if __name__ == "__main__":
     # )
     
     print(f"\n📊 Results Summary:")
-    print(f"   Copy mode missing files: {sum(len(v) for v in missing_copy.values())}")
+    # print(f"   Copy mode missing files: {sum(len(v) for v in missing_copy.values())}")
     # print(f"   Symlink mode missing files: {sum(len(v) for v in missing_symlink.values())}")
     # print(f"   Path mapping missing files: {sum(len(v) for v in missing_mapping.values())}")

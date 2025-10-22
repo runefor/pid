@@ -1,7 +1,6 @@
-model:
-_target_: ocr.models.architecture.ObjectDetector
-model:
-  _target_: ocr.models.factory.create_yolo
-  num_classes: 146
-  pretrained: true
-  model_name: yolov11s # yolo11n yolo11s yolo11m yolo11l yolo11x
+_target_: pid_train.models.factory.create_model
+framework: yolo
+model_name: yolov8s.pt
+num_classes: 146
+pretrained: true
+gradient_checkpointing: false

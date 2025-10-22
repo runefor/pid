@@ -19,6 +19,7 @@ class SplitStrategy(Enum):
     HYBRID = "hybrid"
     ITERATIVE = "iterative"
     ITERATIVE_BY_ANNOTATION = "iterative_by_annotation"
+    RANDOM = "random"
     
     def list():
         return list(map(lambda c: c.value, SplitStrategy))
@@ -170,6 +171,8 @@ class StratifiedDatasetSplitter:
             splits = self._hybrid_split()
         elif self.strategy == SplitStrategy.ITERATIVE:
             splits = self._iterative_split()
+        elif self.strategy == SplitStrategy.RANDOM:
+            splits = self._random_split()
         elif self.strategy == SplitStrategy.ITERATIVE_BY_ANNOTATION:
             return self._iterative_split_by_annotation()
         else:
@@ -303,6 +306,26 @@ class StratifiedDatasetSplitter:
             splits["train"].extend(comb_images[:n_train])
             splits["val"].extend(comb_images[n_train:n_train + n_val])
             splits["test"].extend(comb_images[n_train + n_val:])
+        
+        return splits
+
+    def _random_split(self) -> Dict[str, List[Dict]]:
+        """단순 랜덤 분할"""
+        print("   Using simple random split...")
+        
+        # 사전 할당된 이미지를 제외한 이미지 목록을 복사하여 사용
+        images_to_split = self.valid_images.copy()
+        random.shuffle(images_to_split)
+        
+        n_images = len(images_to_split)
+        n_train = int(n_images * self.train_ratio)
+        n_val = int(n_images * self.val_ratio)
+        
+        splits = {
+            "train": images_to_split[:n_train],
+            "val": images_to_split[n_train:n_train + n_val],
+            "test": images_to_split[n_train + n_val:]
+        }
         
         return splits
     
@@ -731,6 +754,21 @@ class StratifiedDatasetSplitter:
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write("\n".join(report_lines))
             return
+
+        # --- 분할 비율 정보 추가 ---
+        train_imgs = stats.get('train', {}).get('images', 0)
+        val_imgs = stats.get('val', {}).get('images', 0)
+        test_imgs = stats.get('test', {}).get('images', 0)
+        
+        # 고유 이미지 수 기준 실제 비율 계산
+        actual_train_ratio = train_imgs / unique_images_count * 100 if unique_images_count > 0 else 0
+        actual_val_ratio = val_imgs / unique_images_count * 100 if unique_images_count > 0 else 0
+        actual_test_ratio = test_imgs / unique_images_count * 100 if unique_images_count > 0 else 0
+
+        report_lines.append("## 🎯 Split Ratio Summary\n")
+        report_lines.append(f"- **Target Ratio (Train:Val:Test)**: {self.train_ratio * 100:.0f} : {self.val_ratio * 100:.0f} : {self.test_ratio * 100:.0f}")
+        report_lines.append(f"- **Actual Ratio (based on unique images)**: {actual_train_ratio:.1f} : {actual_val_ratio:.1f} : {actual_test_ratio:.1f}\n")
+        # --- 분할 비율 정보 추가 끝 ---
 
         report_lines.append("## Overall Distribution\n")        
         report_lines.append(f"- **Unique Images**: {unique_images_count:,}")
@@ -1223,15 +1261,15 @@ if __name__ == "__main__":
     ]
 
     # 소수 클래스 분포 시각화 분석
-    run_rare_class_analysis = input("\n🔬 Analyze rare class locality and visualize? (y/n): ").lower().strip() == 'y'
-    if run_rare_class_analysis:
-        # 분석을 위해 splitter 인스턴스 생성 및 데이터 로드
-        analysis_splitter = create_splitter(input_json=data_path / "merged_dataset.json", output_dir=data_path / "temp_for_analysis")
-        analyze_rare_class_locality(
-            splitter=analysis_splitter,
-            output_dir=data_path / "rare_class_analysis",
-            source_dirs=source_directories
-        )
+    # run_rare_class_analysis = input("\n🔬 Analyze rare class locality and visualize? (y/n): ").lower().strip() == 'y'
+    # if run_rare_class_analysis:
+    #     # 분석을 위해 splitter 인스턴스 생성 및 데이터 로드
+    #     analysis_splitter = create_splitter(input_json=data_path / "merged_dataset.json", output_dir=data_path / "temp_for_analysis")
+    #     analyze_rare_class_locality(
+    #         splitter=analysis_splitter,
+    #         output_dir=data_path / "rare_class_analysis",
+    #         source_dirs=source_directories
+    #     )
     
     # # 분할
     # print(f"\nUsing recommended strategy: {recommended_strategy}")
@@ -1249,34 +1287,48 @@ if __name__ == "__main__":
     # print(f"Quality Check: {quality}")
     
     # 여러 전략 비교
-    comparison_results = compare_strategies(
-        input_json=data_path / "merged_dataset.json",
-        output_base_dir=data_path / "strategy_comparison"
+    # comparison_results = compare_strategies(
+    #     input_json=data_path / "merged_dataset.json",
+    #     output_base_dir=data_path / "strategy_comparison"
+    # )
+    
+    
+    # # 5. 사용자 맞춤형 설정 예시 (극심한 불균형용)
+    # if characteristics['imbalance_ratio'] > 100:
+    #     print(f"Extreme imbalance detected ({characteristics['imbalance_ratio']:.1f}:1)")
+    #     print("Creating custom split for extreme imbalance...\n")
+        
+    #     custom_splitter = create_splitter(
+    #         input_json=data_path / "merged_dataset.json",
+    #         output_dir=data_path / "extreme_custom_split",
+    #         strategy="hybrid",
+    #         train_ratio=0.8,  # 더 많이 train에 할당
+    #         val_ratio=0.15
+    #     )
+        
+    #     custom_splitter.set_strategy_params(
+    #         rare_threshold=min(100, max(characteristics['class_distribution'].values()) // 50),
+    #         very_rare_threshold=min(20, max(characteristics['class_distribution'].values()) // 200),
+    #         min_samples_per_category=2,
+    #         min_samples_per_split=1
+    #     )
+        
+    #     custom_stats = custom_splitter.split()
+    #     print("Custom extreme imbalance split completed!\n")
+    
+    # 단순 분할
+    random_splitter = create_splitter(
+        input_json=data_path / "merged_v01_dataset.json",
+        output_dir=data_path / "strategy_comparison" / "random_split",
+        strategy="random",
+        train_ratio=0.8,
+        val_ratio=0.1,
+        image_dir=None
     )
     
-    # print("\n🎉 All examples completed!")
+    random_stats = random_splitter.split()
+    quality = validate_split_quality(random_stats)
+    print(f"Random Split Quality Check: {quality}")
     
-    # 5. 사용자 맞춤형 설정 예시 (극심한 불균형용)
-    if characteristics['imbalance_ratio'] > 100:
-        print(f"Extreme imbalance detected ({characteristics['imbalance_ratio']:.1f}:1)")
-        print("Creating custom split for extreme imbalance...\n")
-        
-        custom_splitter = create_splitter(
-            input_json=data_path / "merged_dataset.json",
-            output_dir=data_path / "extreme_custom_split",
-            strategy="hybrid",
-            train_ratio=0.8,  # 더 많이 train에 할당
-            val_ratio=0.15
-        )
-        
-        custom_splitter.set_strategy_params(
-            rare_threshold=min(100, max(characteristics['class_distribution'].values()) // 50),
-            very_rare_threshold=min(20, max(characteristics['class_distribution'].values()) // 200),
-            min_samples_per_category=2,
-            min_samples_per_split=1
-        )
-        
-        custom_stats = custom_splitter.split()
-        print("Custom extreme imbalance split completed!\n")
     
     print(f"All dataset splitting operations completed successfully!")

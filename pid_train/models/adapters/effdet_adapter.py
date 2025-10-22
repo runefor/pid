@@ -2,8 +2,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
-from effdet import DetBenchPredict, unwrap_bench
-from effdet.factory import create_model
+from effdet import get_efficientdet_config, EfficientDet, DetBenchTrain, DetBenchPredict, unwrap_bench
 from omegaconf import OmegaConf # OmegaConf를 import합니다.
 
 from ..base_wrapper import UnifiedDetectionModel
@@ -25,15 +24,23 @@ class EffDetAdapter(nn.Module, UnifiedDetectionModel):
             **kwargs: `effdet.create_model`에 전달할 추가 인자.
         """
         super().__init__()
-        
-        # 1. 학습/검증용 모델(DetBenchTrain) 생성
-        self.model_train = create_model(
-            model_name,
-            bench_task='train',
-            num_classes=num_classes,
-            pretrained=pretrained,
-            **kwargs,
-        )
+
+        # effdet 라이브러리 버그 우회를 위해 모델 생성 로직을 직접 구현
+        # 1. 설정 가져오기 및 업데이트
+        config = get_efficientdet_config(model_name)
+        config.num_classes = num_classes
+        config.update(kwargs)
+
+        # 2. EfficientDet 모델 생성 (kwargs에 custom_labeler가 없도록 함)
+        init_kwargs = kwargs.copy()
+        init_kwargs.pop('custom_labeler', None)
+        model = EfficientDet(config, pretrained_backbone=pretrained, **init_kwargs)
+
+        # 3. DetBenchTrain 생성 (anchor_labeler가 생성되도록 custom_labeler=False 설정)
+        train_config = config.copy()
+        OmegaConf.set_readonly(train_config, False)
+        train_config.custom_labeler = False
+        self.model_train = DetBenchTrain(model, train_config)
         
         # --- gradient_checkpointing 처리 로직 추가 ---
         if gradient_checkpointing:
@@ -46,7 +53,7 @@ class EffDetAdapter(nn.Module, UnifiedDetectionModel):
             OmegaConf.set_readonly(self.model_train.config, True)
             print("[INFO] Gradient Checkpointing enabled for EfficientDet.")
             
-        # 2. 추론용 모델(DetBenchPredict) 생성 및 가중치 공유
+        # 4. 추론용 모델(DetBenchPredict) 생성 및 가중치 공유
         self.model_predict = DetBenchPredict(unwrap_bench(self.model_train))
     
     def forward(
@@ -59,41 +66,28 @@ class EffDetAdapter(nn.Module, UnifiedDetectionModel):
                 raise ValueError("Targets must be provided during training.")
             return self.forward_train(images, targets)
         else:
-            return self.forward_inference(images, targets)
+            return self.forward_inference(images)
 
     def forward_train(
         self, 
         images: torch.Tensor, 
         targets: List[Dict[str, torch.Tensor]]
     ) -> Dict[str, torch.Tensor]:
-        converted_targets = self._convert_targets(targets, images.device)
+        converted_targets = self.convert_targets(targets, images.device)
         return self.model_train(images, converted_targets)
 
     def forward_inference(
         self, 
-        images: torch.Tensor, 
-        targets: Optional[List[Dict[str, torch.Tensor]]] = None
-    ) -> Union[Dict[str, torch.Tensor], List[Dict[str, torch.Tensor]]]:
-        if targets is not None:
-            converted_targets = self._convert_targets(targets, images.device)
-            output = self.model_train(images, converted_targets)
-            output['predictions'] = self.convert_predictions(output['detections'])
-            del output['detections']
-            return output
-        else:
-            detections = self.model_predict(images)
-            return self.convert_predictions(detections)
+        images: torch.Tensor
+    ) -> List[Dict[str, torch.Tensor]]:
+        detections = self.model_predict(images)
+        return self.convert_predictions(detections)
 
-    def _convert_targets(self, targets: List[Dict[str, torch.Tensor]], device: torch.device) -> Dict[str, torch.Tensor]:
+    def convert_targets(self, targets: List[Dict[str, torch.Tensor]], device: torch.device) -> Dict[str, torch.Tensor]:
         boxes = [t['boxes'] for t in targets]
         labels = [t['labels'] for t in targets]
-        
-        bboxes_yxyx = [
-            torch.stack([b[:, 1], b[:, 0], b[:, 3], b[:, 2]], dim=1) if len(b) > 0 else b
-            for b in boxes
-        ]
 
-        padded_bboxes = self._collate_tensor_list(bboxes_yxyx, pad_value=0)
+        padded_bboxes = self._collate_tensor_list(boxes, pad_value=0)
         padded_labels = self._collate_tensor_list(labels, pad_value=-1)
         
         default_img_size = torch.tensor([512., 512.], device=device)
@@ -102,11 +96,14 @@ class EffDetAdapter(nn.Module, UnifiedDetectionModel):
         img_sizes = torch.stack([t.get('img_size', default_img_size) for t in targets]).to(device)
         img_scales = torch.stack([t.get('img_scale', default_img_scale) for t in targets]).to(device)
 
+        label_num_positives = torch.tensor([len(b) for b in boxes], device=device)
+
         return {
             'bbox': padded_bboxes,
             'cls': padded_labels,
             'img_size': img_sizes,
-            'img_scale': img_scales
+            'img_scale': img_scales,
+            'label_num_positives': label_num_positives
         }
         
     def convert_predictions(self, detections: torch.Tensor) -> List[Dict[str, torch.Tensor]]:

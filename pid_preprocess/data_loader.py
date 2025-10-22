@@ -10,6 +10,7 @@ import pandas as pd
 
 try:
     from pid_preprocess import schemas
+    from utils.file_utils import load_json_data
 except ModuleNotFoundError:
     import sys
     # 프로젝트 루트 경로를 sys.path에 추가합니다.

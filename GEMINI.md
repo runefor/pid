@@ -5,9 +5,10 @@
 This project is a machine learning pipeline for object detection. It uses PyTorch Lightning for training and Hydra for configuration management. The pipeline is divided into several stages:
 
 *   **Preprocessing:** The `main_preprocess_pipeline.py` script loads data, adds features, and performs exploratory data analysis (EDA).
-*   **Training:** The `pid_train.py` script, which calls `pid_train/runners/train.py`, trains an object detection model. The training process is highly configurable using Hydra.
+*   **Training:** The `pid_train.py` script, which calls `pid_train/runners/train.py`, trains an object detection model using the `ObjectDetectionLitModule` Lightning module. The training process is highly configurable using Hydra.
 *   **Prediction:** The `predict.py` script is likely used for making predictions with a trained model.
-*   **Evaluation:** The `evaluate.py` script is likely used for evaluating the performance of a trained model.
+*   **Evaluation:** The `evaluate.py` script is used for evaluating the performance of a trained model. It uses a sliding-window approach to handle tiled models correctly.
+*   **Metric Testing:** The `test_eval_metrics.py` script is a unit test for verifying the logic of the evaluation metrics.
 *   **MMDetection Training:** The `pid_mm_train/` directory contains scripts for training models using the MMDetection framework.
 
 The project has recently been refactored to support a more modular architecture. It now uses a model factory with adapters for different object detection frameworks, including:

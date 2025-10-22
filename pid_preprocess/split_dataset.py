@@ -770,7 +770,8 @@ class StratifiedDatasetSplitter:
         report_lines.append(f"- **Actual Ratio (based on unique images)**: {actual_train_ratio:.1f} : {actual_val_ratio:.1f} : {actual_test_ratio:.1f}\n")
         # --- 분할 비율 정보 추가 끝 ---
 
-        report_lines.append("## Overall Distribution\n")        
+        report_lines.append("## Overall Distribution\n")
+        report_lines.append(f"- **Total Categories**: {len(self.categories):,}\n")
         report_lines.append(f"- **Unique Images**: {unique_images_count:,}")
         if duplication_rate > 0.1:
             report_lines.append(f"- **Image Duplication Rate**: {duplication_rate:.1f}% (An image can appear in multiple splits)\n")
@@ -1319,7 +1320,7 @@ if __name__ == "__main__":
     # 단순 분할
     random_splitter = create_splitter(
         input_json=data_path / "merged_v01_dataset.json",
-        output_dir=data_path / "strategy_comparison" / "random_split",
+        output_dir=data_path / "strategy_comparison_V01" / "random_split",
         strategy="random",
         train_ratio=0.8,
         val_ratio=0.1,

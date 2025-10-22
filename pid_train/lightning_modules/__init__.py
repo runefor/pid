@@ -1,1 +1,1 @@
-from .object_detection_pl import ObjectDetectionLitModule
+from .object_detection_lit_module import ObjectDetectionLitModule

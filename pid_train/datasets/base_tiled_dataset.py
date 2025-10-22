@@ -124,10 +124,10 @@ class BaseTiledDataset(Dataset, ABC):
             print(f"[WARNING] Empty boxes after transform at index {index}")
             
         # 서브클래스에서 구현
-        target = self._create_target(boxes, labels)
+        target = self._create_target(boxes, labels, tile_info['image_id'])
         return image, target
 
     @abstractmethod
-    def _create_target(self, boxes: List, labels: List) -> Dict[str, torch.Tensor]:
+    def _create_target(self, boxes: List, labels: List, image_id: int) -> Dict[str, torch.Tensor]:
         """모델별로 타겟 형식을 다르게 구현"""
         pass

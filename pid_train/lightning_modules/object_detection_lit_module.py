@@ -1,0 +1,127 @@
+import hydra
+import torch
+import effdet
+from lightning import LightningModule
+from omegaconf import DictConfig
+
+from pid_train.models.base_wrapper import UnifiedDetectionModel
+from pid_train.metrics.eval_metrics import ObjectDetectionMetrics, ConfusionMatrix, ObjectDetectionAP
+
+
+class ObjectDetectionLitModule(LightningModule):
+    """
+    Object Detection을 위한 LightningModule.
+    Hydra를 통해 모델, 옵티마이저, 스케줄러 설정을 주입받습니다.
+    """
+    def __init__(
+        self,
+        model: UnifiedDetectionModel,
+        optimizer_cfg: DictConfig,
+        scheduler_cfg: DictConfig,
+        dataset_cfg: DictConfig,
+        num_classes: int,
+        max_dets: int = 100,
+    ):
+        super().__init__()
+        
+        self.model = model
+        self.save_hyperparameters(ignore=['model']) 
+
+        # 평가지표
+        self.object_detection_metrics = ObjectDetectionMetrics(num_classes=num_classes)
+        self.confusion_matrix = ConfusionMatrix(num_classes=num_classes)
+        # self.object_detection_ap = ObjectDetectionAP(
+        #     annotations_file=dataset_cfg.val.annotation_file,
+        #     num_classes=num_classes,
+        #     max_dets=max_dets
+        # )
+
+    def training_step(self, batch, batch_idx):
+        images, targets = batch
+        loss_dict = self.model(images, targets)
+        total_loss = sum(loss for loss in loss_dict.values())
+
+        self.log_dict(loss_dict, prog_bar=True)
+        self.log("train/total_loss", total_loss)
+
+        return total_loss
+
+    def _convert_to_coco_format(self, predictions, targets):
+        coco_preds = []
+        for i, (pred, target) in enumerate(zip(predictions, targets)):
+            image_id = target['image_id'].item()
+            boxes = pred['boxes']
+            labels = pred['labels']
+            scores = pred['scores']
+
+            for j in range(len(boxes)):
+                box = boxes[j].tolist()
+                # Convert from xyxy to xywh
+                x1, y1, x2, y2 = box
+                w = x2 - x1
+                h = y2 - y1
+                coco_preds.append({
+                    'image_id': image_id,
+                    'category_id': labels[j].item(),
+                    'bbox': [x1, y1, w, h],
+                    'score': scores[j].item()
+                })
+        return coco_preds
+
+    def validation_step(self, batch, batch_idx):
+        images, targets = batch
+        
+        predictions = self.model(images, targets)
+
+        # self.object_detection_metrics.update(predictions, targets)
+        # self.confusion_matrix.update(predictions, targets)
+        
+        # coco_preds = self._convert_to_coco_format(predictions, targets)
+        # self.object_detection_ap.update(coco_preds)
+
+    def on_validation_epoch_end(self):
+        """검증 에폭이 끝날 때 호출됩니다."""
+        # ObjectDetectionMetrics 로깅
+        # obj_det_metrics = self.object_detection_metrics.compute()
+        # per_class_f1 = obj_det_metrics.pop("per_class_f1") # Pop the list before logging dict
+        # self.log_dict({f"val/{k}": v for k, v in obj_det_metrics.items()}, prog_bar=True)
+        # # 클래스별 F1 스코어 로깅
+        # for i, f1 in enumerate(per_class_f1): # Use the popped list
+        #     self.log(f"val_f1_class/class_{i}", f1)
+        # self.object_detection_metrics.reset()
+
+        # # ConfusionMatrix 로깅 (텐서 자체를 로깅)
+        # confusion_matrix = self.confusion_matrix.compute()
+        # # Note: Logging a large tensor directly might not be ideal for all loggers.
+        # # For MLflow/TensorBoard, it might be logged as a text representation or require custom handling for visualization.
+        # # For now, we log the mean of the tensor.
+        # self.log("val/confusion_matrix_mean", confusion_matrix.mean())
+        # self.confusion_matrix.reset()
+
+        # ObjectDetectionAP 로깅
+        # obj_det_ap_metrics = self.object_detection_ap.compute()
+        # per_class_ap = obj_det_ap_metrics.pop("per_class_ap") # Pop the list before logging dict
+        # self.log_dict({f"val/{k}": v for k, v in obj_det_ap_metrics.items()}, prog_bar=True)
+        # # 클래스별 AP 로깅
+        # for i, ap in enumerate(per_class_ap): # Use the popped list
+        # #     self.log(f"val_ap_class/class_{i}", ap)
+        # # self.object_detection_ap.reset()
+
+    def configure_optimizers(self):
+        """옵티마이저와 스케줄러를 설정합니다."""
+        optimizer_cfg = self.hparams.optimizer_cfg.copy()
+        optimizer_cfg._target_ = optimizer_cfg.pop('class')
+        optimizer_cfg.params = self.model.parameters()
+        optimizer = hydra.utils.instantiate(optimizer_cfg)
+
+        scheduler_cfg = self.hparams.scheduler_cfg.copy()
+        scheduler_cfg._target_ = scheduler_cfg.pop('class')
+        scheduler = hydra.utils.instantiate(scheduler_cfg, optimizer=optimizer)
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+            },
+        }

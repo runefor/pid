@@ -2,7 +2,7 @@
 defaults:
   - base.yaml
   - dataset: config_torchvision
-  - models: yolo
+  - models: efficientdet
   - _self_
 
 # =======================================================
@@ -18,18 +18,22 @@ datamodule:
 
 # 2. 라이트닝 모듈 설정
 lit_module:
-  _target_: pid_train.lightning_modules.object_detection_pl.ObjectDetectionLitModule
+  _target_: pid_train.lightning_modules.object_detection_lit_module.ObjectDetectionLitModule
   model: ${models}
+  dataset_cfg: ${dataset}
+  num_classes: ${models.num_classes}
   optimizer_cfg:
     class: torch.optim.AdamW
     lr: 0.0001
   scheduler_cfg:
     class: torch.optim.lr_scheduler.CosineAnnealingLR
     T_max: 10000
+  max_dets: 10 # For debugging / faster validation
 
 # 3. 트레이너 설정 (base.yaml 오버라이드)
 trainer:
-  max_epochs: 2
+  max_epochs: 1
+  check_val_every_n_epoch: 1
 
 # 4. 변환 설정 (지연된 초기화를 위해 _target_ -> class로 변경)
 transform_cfg:
@@ -40,9 +44,9 @@ transform_cfg:
       width: 512
     - _target_: albumentations.HorizontalFlip
       p: 0.5
-    - _target_: albumentations.Rotater
-      limit: 90
-      p: 0.3
+    # - _target_: albumentations.Rotater
+    #   limit: 90
+    #   p: 0.3
     - _target_: albumentations.Normalize
       mean:
         - 0.485

@@ -185,13 +185,22 @@ class ObjectDetectionAP(Metric):
         self.max_dets = max_dets
         
         # 상태: 예측 결과 리스트 누적
-        self.add_state("predictions", default=[], dist_reduce_fx="cat")  # 리스트지만 TorchMetrics에서 텐서처럼 취급; 실제론 리스트
+        self.predictions = []
 
         # COCO GT 로드 (초기화 시)
-        self.coco_gt = COCO(annotations_file)
+        with open(annotations_file, 'r') as f:
+            gt_json_dict = json.load(f)
+        self.coco_gt = COCO() # Initialize with empty COCO object
+        self.coco_gt.dataset = gt_json_dict # Assign the loaded dictionary
+        self.coco_gt.createIndex()
         self.category_ids = self.coco_gt.getCatIds()  # 클래스 ID 리스트
         if len(self.category_ids) != num_classes:
             raise ValueError(f"GT 파일의 클래스 수({len(self.category_ids)})가 num_classes({num_classes})와 맞지 않습니다.")
+
+        # Create a mapping from original COCO category ID to contiguous index (0 to num_classes-1)
+        self.coco_cat_id_to_contiguous_idx = {
+            coco_id: i for i, coco_id in enumerate(sorted(self.category_ids))
+        }
 
     def update(self, preds: List[Dict[str, Any]]):
         """
@@ -204,13 +213,8 @@ class ObjectDetectionAP(Metric):
         if not self.predictions:
             return {"map": 0.0, "map_50": 0.0, "per_class_ap": [0.0] * self.num_classes}
 
-        # 임시 파일 생성
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(self.predictions, f)
-            pred_file = f.name
-
         # COCO DT 로드
-        coco_dt = self.coco_gt.loadRes(pred_file)
+        coco_dt = self.coco_gt.loadRes(self.predictions)
         
         # 평가 실행
         coco_eval = COCOeval(self.coco_gt, coco_dt, self.iou_type)
@@ -227,12 +231,10 @@ class ObjectDetectionAP(Metric):
         # 클래스별 AP: coco_eval.eval['precision']에서 추출 (11-point 평균, but all-point approx)
         per_class_ap = [0.0] * self.num_classes
         for i, cat_id in enumerate(self.category_ids):
+            contiguous_idx = self.coco_cat_id_to_contiguous_idx[cat_id]
             # coco_eval.eval['precision'][0, :, i, 0, -1] : IoU=0.5:0.95, area=all, maxDets=100의 AP
             ap = coco_eval.eval['precision'][0, :, i, 0, -1].mean() if len(coco_eval.eval['precision']) > 0 else 0.0
-            per_class_ap[cat_id - 1] = ap  # 클래스 ID 1~146 → 인덱스 0~145
-
-        # 임시 파일 삭제
-        os.unlink(pred_file)
+            per_class_ap[contiguous_idx] = ap
 
         # 예측 리스트 리셋 (다음 에포크용)
         self.predictions = []

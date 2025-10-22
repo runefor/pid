@@ -9,4 +9,4 @@ val:
   annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/val.json"
 tile_size: 512
 overlap: 0.25
-debug_image_count: 100
+debug_image_count: 1 # null 이면 디버그 모드로 동작한함.

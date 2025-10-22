@@ -1,10 +1,15 @@
 # pid_preprocess/eda_runner.py
 __all__ = [
-    "run_bbox_analysis", "run_class_distribution_analysis", "run_image_property_analysis", "run_train_test_comparison"
+    "run_bbox_analysis", "run_class_distribution_analysis", "run_image_property_analysis", "run_train_test_comparison",
+    "visualize_combined_class_distribution"
 ]
 from pathlib import Path
+from collections import Counter
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from pandas import DataFrame
+import pandas as pd
 
 from pid_preprocess.data_loader import LoadedDaskData
 from visualization import plotting
@@ -199,3 +204,68 @@ def run_train_test_comparison(
         non_overlapping_info=non_overlapping_classes,
         output_path=save_path / 'analysis/combined_class_imbalance_summary.md'
     )
+
+
+def visualize_combined_class_distribution(
+    train_data: LoadedDaskData, # Assuming DataLoader returns LoadedDaskData
+    test_data: LoadedDaskData, # Assuming DataLoader returns LoadedDaskData
+    categories_df: pd.DataFrame,
+    save_path: Path,
+    prefix: str = "combined"
+) -> None:
+    """
+    Train 및 Test 데이터셋을 합친 상태에서의 클래스별 객체 수 분포를 시각화합니다.
+    """
+    print(f"📊 Starting combined class distribution visualization for '{prefix}' data...")
+
+    figure_path = save_path / "figures"
+    figure_path.mkdir(parents=True, exist_ok=True)
+
+    # Combine annotations from train and test
+    # Ensure dask.dataframe is imported for dd.concat
+    import dask.dataframe as dd
+    combined_annotations_ddf = dd.concat([train_data.annotations, test_data.annotations], ignore_index=True)
+
+    # Compute class counts
+    class_counts_series = combined_annotations_ddf['category_id'].value_counts().compute()
+    class_counts = Counter(class_counts_series.to_dict())
+
+    # Map category IDs to names
+    id_to_name = categories_df['name'].to_dict()
+
+    # Sort class distribution by count
+    class_distribution = sorted(
+        [(id_to_name.get(cat_id, f"Unknown({cat_id})"), count) for cat_id, count in class_counts.items()],
+        key=lambda item: item[1],
+        reverse=True
+    )
+
+    if not class_distribution:
+        print("   ⚠️ No annotations found in the combined dataset.")
+        return
+
+    # Visualization
+    _plotting_class_distribution(class_distribution, f'Class Distribution in Combined Train and Test Data ({prefix.title()})', figure_path / f"{prefix}_class_distribution.png")
+
+
+def _plotting_class_distribution(class_distribution: list, title: str, save_file: Path) -> None:
+    """
+    클래스 분포를 막대 그래프로 시각화하고 저장합니다.
+    (내부 사용을 위해 _ 접두사 추가)
+    """
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, ax = plt.subplots(figsize=(14, max(10, len(class_distribution) * 0.4))) # 클래스 수에 따라 높이 조절
+
+    class_names, counts = zip(*class_distribution)
+    sns.barplot(x=list(counts), y=list(class_names), orient='h', ax=ax)
+
+    ax.bar_label(ax.containers[0], fmt='{:,.0f}', padding=5, fontsize=10)
+
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel('Number of Annotations', fontsize=12)
+    ax.set_ylabel('Class Name', fontsize=12)
+    ax.set_xlim(right=max(counts) * 1.15) # 숫자 레이블이 잘리지 않도록 x축 범위 확장
+    plt.tight_layout()
+    plt.savefig(save_file)
+    plt.close(fig) # 메모리 해제를 위해 figure 닫기
+    print(f"   ✅ Visualization saved to: {save_file}")

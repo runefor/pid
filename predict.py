@@ -7,7 +7,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 
-from pid_train.lightning_modules.object_detection_pl import ObjectDetectionLitModule
+from pid_train.lightning_modules.object_detection_lit_module import ObjectDetectionLitModule
 from pid_train.datasets.coco_style_dataset import CocoStyleDataset
 from utils.tile_utils import tile_image, merge_detections
 

@@ -55,48 +55,66 @@ class ObjectDetectionMetrics(Metric): # TODO: metric.py로 옮기기
 
     def _calculate_metrics(self, pred: dict, target: dict):
         pred_boxes = pred['boxes']
-        pred_labels = pred['labels']  # [N], 클래스 0~145 (또는 1~146; 조정 필요)
+        pred_labels = pred['labels']
         gt_boxes = target['boxes']
-        gt_labels = target['labels']  # [M]
-        
-        # 클래스 루프
-        for cls in range(self.num_classes):
-            mask_pred = (pred_labels == cls)
-            mask_gt = (gt_labels == cls)
-            pred_cls_boxes = pred_boxes[mask_pred]
-            gt_cls_boxes = gt_boxes[mask_gt]
-            
-            if len(pred_cls_boxes) == 0 and len(gt_cls_boxes) == 0:
-                continue
-            if len(pred_cls_boxes) == 0:
-                self.false_negatives[cls] += len(gt_cls_boxes)
-                continue
-            if len(gt_cls_boxes) == 0:
-                self.false_positives[cls] += len(pred_cls_boxes)
-                continue
-            
-            # Greedy IoU 매칭
-            iou_matrix = box_iou(pred_cls_boxes, gt_cls_boxes)
-            tp = 0
-            matched_preds = set()
-            for i in range(len(gt_cls_boxes)):
-                best_j = -1
-                best_iou = 0.0
-                for j in range(len(pred_cls_boxes)):
-                    if j in matched_preds:
-                        continue
-                    if iou_matrix[j, i] > best_iou:
-                        best_iou = iou_matrix[j, i]
-                        best_j = j
-                if best_iou > self.iou_threshold:
-                    tp += 1
-                    matched_preds.add(best_j)
-            
-            fp = len(pred_cls_boxes) - len(matched_preds)
-            fn = len(gt_cls_boxes) - tp
-            self.true_positives[cls] += tp
-            self.false_positives[cls] += fp
-            self.false_negatives[cls] += fn
+        gt_labels = target['labels']
+
+        if len(pred_boxes) == 0:
+            if len(gt_boxes) > 0:
+                for label in gt_labels:
+                    if label < self.num_classes:
+                        self.false_negatives[label] += 1
+            return
+
+        if len(gt_boxes) == 0:
+            for label in pred_labels:
+                if label < self.num_classes:
+                    self.false_positives[label] += 1
+            return
+
+        # Sort predictions by score
+        if 'scores' in pred:
+            scores = pred['scores']
+            sorted_indices = torch.argsort(scores, descending=True)
+            pred_boxes = pred_boxes[sorted_indices]
+            pred_labels = pred_labels[sorted_indices]
+
+        iou_matrix = box_iou(pred_boxes, gt_boxes)
+
+        # Find the best match for each ground truth box
+        gt_matches = torch.zeros(len(gt_boxes), dtype=torch.bool, device=pred_boxes.device)
+        pred_matches = torch.zeros(len(pred_boxes), dtype=torch.bool, device=pred_boxes.device)
+
+        for i in range(len(gt_boxes)):
+            # Find the best prediction for this ground truth box
+            best_match_iou = -1
+            best_match_idx = -1
+
+            for j in range(len(pred_boxes)):
+                if pred_labels[j] < self.num_classes and gt_labels[i] < self.num_classes and pred_labels[j] == gt_labels[i] and not pred_matches[j]:
+                    iou = iou_matrix[j, i]
+                    if iou > best_match_iou:
+                        best_match_iou = iou
+                        best_match_idx = j
+
+            if best_match_iou > self.iou_threshold:
+                if not gt_matches[i] and not pred_matches[best_match_idx]:
+                    if gt_labels[i] < self.num_classes:
+                        self.true_positives[gt_labels[i]] += 1
+                    gt_matches[i] = True
+                    pred_matches[best_match_idx] = True
+
+        # Process unmatched predictions as false positives
+        for j in range(len(pred_boxes)):
+            if not pred_matches[j]:
+                if pred_labels[j] < self.num_classes:
+                    self.false_positives[pred_labels[j]] += 1
+
+        # Process unmatched ground truths as false negatives
+        for i in range(len(gt_boxes)):
+            if not gt_matches[i]:
+                if gt_labels[i] < self.num_classes:
+                    self.false_negatives[gt_labels[i]] += 1
             
 
 class ConfusionMatrix(Metric): # TODO: metric.py로 옮기기
@@ -158,94 +176,9 @@ class ConfusionMatrix(Metric): # TODO: metric.py로 옮기기
                 self.cm[cls_pred, 0] += fp_count
                 
 
-class ObjectDetectionAP(Metric):
-    """
-    TorchMetrics 스타일의 mAP와 클래스별 AP 계산 클래스.
-    pycocotools를 사용해 COCO 형식으로 평가합니다.
-    - update(): 예측 결과를 COCO 형식 리스트로 누적 (이미지 ID, category_id, bbox, score 포함).
-    - compute(): 임시 JSON 파일 생성 후 COCOeval로 mAP@0.5:0.95, mAP@0.5, 클래스별 AP 반환.
-    
-    사용법:
-    - GT는 COCO 형식 annotations.json 파일 경로를 __init__에 전달.
-    - preds는 [{'image_id': int, 'category_id': int, 'bbox': [x,y,w,h], 'score': float}, ...] 형태.
-    - 클래스 ID: 1~num_classes (배경 0 제외).
-    """
-    def __init__(
-        self,
-        annotations_file: str,  # GT annotations.json 경로
-        num_classes: int = 146,
-        iou_type: str = 'bbox',  # 'bbox' or 'segm'
-        max_dets: int = 100,
-        dist_sync_on_step: bool = False
-    ):
-        super().__init__(dist_sync_on_step=dist_sync_on_step)
-        self.annotations_file = annotations_file
-        self.num_classes = num_classes
-        self.iou_type = iou_type
-        self.max_dets = max_dets
-        
-        # 상태: 예측 결과 리스트 누적
-        self.predictions = []
+from torchmetrics.detection import MeanAveragePrecision
 
-        # COCO GT 로드 (초기화 시)
-        with open(annotations_file, 'r') as f:
-            gt_json_dict = json.load(f)
-        self.coco_gt = COCO() # Initialize with empty COCO object
-        self.coco_gt.dataset = gt_json_dict # Assign the loaded dictionary
-        self.coco_gt.createIndex()
-        self.category_ids = self.coco_gt.getCatIds()  # 클래스 ID 리스트
-        if len(self.category_ids) != num_classes:
-            raise ValueError(f"GT 파일의 클래스 수({len(self.category_ids)})가 num_classes({num_classes})와 맞지 않습니다.")
 
-        # Create a mapping from original COCO category ID to contiguous index (0 to num_classes-1)
-        self.coco_cat_id_to_contiguous_idx = {
-            coco_id: i for i, coco_id in enumerate(sorted(self.category_ids))
-        }
-
-    def update(self, preds: List[Dict[str, Any]]):
-        """
-        예측 결과를 누적. preds: COCO 형식 리스트.
-        예: [{'image_id': 1, 'category_id': 1, 'bbox': [10,10,20,20], 'score': 0.9}, ...]
-        """
-        self.predictions.extend(preds)
-
-    def compute(self) -> Dict[str, Any]:
-        if not self.predictions:
-            return {"map": 0.0, "map_50": 0.0, "per_class_ap": [0.0] * self.num_classes}
-
-        # COCO DT 로드
-        coco_dt = self.coco_gt.loadRes(self.predictions)
-        
-        # 평가 실행
-        coco_eval = COCOeval(self.coco_gt, coco_dt, self.iou_type)
-        coco_eval.params.maxDets = [0, self.max_dets, 1000]  # max detections 제한
-        coco_eval.evaluate()
-        coco_eval.accumulate()
-        coco_eval.summarize()
-        
-        # 결과 추출: mAP@0.5:0.95 (stats[0]), mAP@0.5 (stats[1])
-        stats = coco_eval.stats
-        map_score = stats[0]  # mAP@0.5:0.95
-        map_50 = stats[1]    # mAP@0.5
-        
-        # 클래스별 AP: coco_eval.eval['precision']에서 추출 (11-point 평균, but all-point approx)
-        per_class_ap = [0.0] * self.num_classes
-        for i, cat_id in enumerate(self.category_ids):
-            contiguous_idx = self.coco_cat_id_to_contiguous_idx[cat_id]
-            # coco_eval.eval['precision'][0, :, i, 0, -1] : IoU=0.5:0.95, area=all, maxDets=100의 AP
-            ap = coco_eval.eval['precision'][0, :, i, 0, -1].mean() if len(coco_eval.eval['precision']) > 0 else 0.0
-            per_class_ap[contiguous_idx] = ap
-
-        # 예측 리스트 리셋 (다음 에포크용)
-        self.predictions = []
-
-        return {
-            "map": float(map_score),
-            "map_50": float(map_50),
-            "per_class_ap": per_class_ap  # [146개] 리스트
-        }
-
-    def reset(self):
-        """상태 리셋"""
-        super().reset()
-        self.predictions = []
+class ObjectDetectionAP(MeanAveragePrecision):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)

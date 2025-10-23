@@ -28,11 +28,11 @@ lit_module:
   scheduler_cfg:
     class: torch.optim.lr_scheduler.CosineAnnealingLR
     T_max: 10000
-  max_dets: 10 # For debugging / faster validation
+  max_dets: 100 # 1, 10, 100 중 선택 100을 가장 많이 사용하는 것 같음.
 
 # 3. 트레이너 설정 (base.yaml 오버라이드)
 trainer:
-  max_epochs: 1
+  max_epochs: 2
   check_val_every_n_epoch: 1
 
 # 4. 변환 설정 (지연된 초기화를 위해 _target_ -> class로 변경)
@@ -44,7 +44,7 @@ transform_cfg:
       width: 512
     - _target_: albumentations.HorizontalFlip
       p: 0.5
-    # - _target_: albumentations.Rotater
+    # - _target_: albumentations.Rotate
     #   limit: 90
     #   p: 0.3
     - _target_: albumentations.Normalize

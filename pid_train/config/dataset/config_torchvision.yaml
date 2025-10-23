@@ -2,11 +2,13 @@
 train:
   class: pid_train.datasets.torchvision_tiled_dataset.TorchvisionTiledDataset
   image_dir: "${oc.env:PROJECT_ROOT}/assets/image/all/images"
-  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/train.json"
+  # annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/train.json"
+  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison_v01/random_split/annotations/train.json"
 val:
   class: pid_train.datasets.torchvision_tiled_dataset.TorchvisionTiledDataset
   image_dir: "${oc.env:PROJECT_ROOT}/assets/image/all/images"
-  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/val.json"
+  # annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/val.json"
+  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison_v01/random_split/annotations/val.json"
 tile_size: 512
-overlap: 0.25
+overlap: 0.1
 debug_image_count: 1 # null 이면 디버그 모드로 동작한함.

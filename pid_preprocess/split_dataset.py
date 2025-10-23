@@ -1272,16 +1272,18 @@ if __name__ == "__main__":
     #         source_dirs=source_directories
     #     )
     
-    # # 분할
-    # print(f"\nUsing recommended strategy: {recommended_strategy}")
-    # stats = quick_split(
-    #     input_json=data_path / "merged_dataset.json",
-    #     # output_dir=data_path / f"recommended_split_{recommended_strategy}",
-    #     output_dir=data_path / f"recommended_split_iterative_by_annotation",
-    #     # strategy=recommended_strategy,
-    #     strategy="iterative_by_annotation",
-    #     image_dir=None
-    # )
+    # 분할
+    print(f"\nUsing recommended strategy: {recommended_strategy}")
+    stats = quick_split(
+        input_json=data_path / "merged_v01_dataset.json",
+        # output_dir=data_path / f"recommended_split_{recommended_strategy}",
+        output_dir=data_path / f"recommended_split_iterative_by_annotation",
+        # strategy=recommended_strategy,
+        strategy="random",
+        train_ratio=0.8,
+        val_ratio=0.1,
+        image_dir=None
+    )
     
     # # 품질 검증
     # quality = validate_split_quality(stats)
@@ -1316,20 +1318,7 @@ if __name__ == "__main__":
         
     #     custom_stats = custom_splitter.split()
     #     print("Custom extreme imbalance split completed!\n")
-    
-    # 단순 분할
-    random_splitter = create_splitter(
-        input_json=data_path / "merged_v01_dataset.json",
-        output_dir=data_path / "strategy_comparison_V01" / "random_split",
-        strategy="random",
-        train_ratio=0.8,
-        val_ratio=0.1,
-        image_dir=None
-    )
-    
-    random_stats = random_splitter.split()
-    quality = validate_split_quality(random_stats)
-    print(f"Random Split Quality Check: {quality}")
+
     
     
     print(f"All dataset splitting operations completed successfully!")

@@ -1,9 +1,0 @@
-train:
-  class: pid_train.datasets.coco_style_dataset.CocoStyleDataset # _target_을 class로 변경
-  image_dir: "${oc.env:PROJECT_ROOT}/assets/image/all/images"
-  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/train.json"
-
-val:
-  class: pid_train.datasets.coco_style_dataset.CocoStyleDataset # _target_을 class로 변경
-  image_dir: "${oc.env:PROJECT_ROOT}/assets/image/all/images"
-  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/iterative/annotations/val.json"

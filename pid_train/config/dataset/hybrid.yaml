@@ -1,8 +1,0 @@
-_target_: pid_train.datasets.coco_style_dataset.CocoStyleDataset
-
-train:
-  image_dir: "${oc.env:PROJECT_ROOT}/assets/image/all/images/"
-  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/hybrid/annotations/train.json"
-val:
-  image_dir: "${oc.env:PROJECT_ROOT}/assets/image/all/images"
-  annotation_file: "${oc.env:PROJECT_ROOT}/assets/strategy_comparison/hybrid/annotations/val.json"

@@ -1,4 +1,5 @@
 import hydra
+import numpy as np
 import torch
 import effdet
 import seaborn as sns
@@ -93,8 +94,9 @@ class ObjectDetectionLitModule(LightningModule):
     def on_train_end(self):
         """학습이 끝난 후 호출됩니다."""
         confusion_matrix = self.confusion_matrix.compute().cpu().numpy()
+        confusion_matrix_normalized = confusion_matrix.astype('float') / confusion_matrix.sum(axis=1)[:, np.newaxis]
         fig, ax = plt.subplots(figsize=(20, 20))
-        sns.heatmap(confusion_matrix, annot=True, fmt='.0f', ax=ax, annot_kws={"size": 8})
+        sns.heatmap(confusion_matrix_normalized, annot=True, fmt='.0f', ax=ax, annot_kws={"size": 8})
         ax.set_xlabel('Predicted labels')
         ax.set_ylabel('True labels')
         ax.set_title('Confusion Matrix')

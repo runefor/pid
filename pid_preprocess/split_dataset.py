@@ -117,6 +117,24 @@ class StratifiedDatasetSplitter:
         for ann in self.annotations:
             self.img_to_anns[ann['image_id']].append(ann)
         
+        # --- ID 일치 분석 코드 추가 ---
+        all_image_ids = {img['id'] for img in self.images}
+        ann_image_ids = set(self.img_to_anns.keys())
+        matching_ids = all_image_ids.intersection(ann_image_ids)
+        non_matching_ann_ids = ann_image_ids - all_image_ids
+
+        print("\n🔍 Analyzing image and annotation ID matching:")
+        print(f"   - Found {len(all_image_ids)} unique image IDs in 'images' list.")
+        print(f"   - Found {len(ann_image_ids)} unique image IDs in 'annotations' list.")
+        print(f"   - Found {len(matching_ids)} matching image IDs between them.")
+
+        if len(ann_image_ids) > 0 and len(matching_ids) == 0:
+            print("   - ⚠️ WARNING: No annotation 'image_id' matches any 'id' in the 'images' list.")
+            if len(non_matching_ann_ids) > 0:
+                print(f"   - Example non-matching annotation image_id(s): {list(non_matching_ann_ids)[:5]}")
+        print()
+        # --- ID 일치 분석 코드 끝 ---
+
         # 어노테이션이 있는 이미지만 필터링
         self.valid_images = [img for img in self.images if img['id'] in self.img_to_anns]
         print(f"   Valid images (with annotations): {len(self.valid_images):,}")
@@ -760,14 +778,14 @@ class StratifiedDatasetSplitter:
         val_imgs = stats.get('val', {}).get('images', 0)
         test_imgs = stats.get('test', {}).get('images', 0)
         
-        # 고유 이미지 수 기준 실제 비율 계산
-        actual_train_ratio = train_imgs / unique_images_count * 100 if unique_images_count > 0 else 0
-        actual_val_ratio = val_imgs / unique_images_count * 100 if unique_images_count > 0 else 0
-        actual_test_ratio = test_imgs / unique_images_count * 100 if unique_images_count > 0 else 0
+        # 분할된 총 이미지 수 기준 실제 비율 계산 (중복 포함)
+        actual_train_ratio = train_imgs / total_images * 100 if total_images > 0 else 0
+        actual_val_ratio = val_imgs / total_images * 100 if total_images > 0 else 0
+        actual_test_ratio = test_imgs / total_images * 100 if total_images > 0 else 0
 
         report_lines.append("## 🎯 Split Ratio Summary\n")
         report_lines.append(f"- **Target Ratio (Train:Val:Test)**: {self.train_ratio * 100:.0f} : {self.val_ratio * 100:.0f} : {self.test_ratio * 100:.0f}")
-        report_lines.append(f"- **Actual Ratio (based on unique images)**: {actual_train_ratio:.1f} : {actual_val_ratio:.1f} : {actual_test_ratio:.1f}\n")
+        report_lines.append(f"- **Actual Ratio (based on image counts per split)**: {actual_train_ratio:.1f} : {actual_val_ratio:.1f} : {actual_test_ratio:.1f}\n")
         # --- 분할 비율 정보 추가 끝 ---
 
         report_lines.append("## Overall Distribution\n")
@@ -779,8 +797,8 @@ class StratifiedDatasetSplitter:
         report_lines.append("| Split | Images | Image % | Annotations | Annotation % |")
         report_lines.append("|:------|-------:|--------:|------------:|-------------:|")
         for split_name, split_stats in stats.items():
-            # 이미지 %는 고유 이미지 수 대비로 계산해야 의미가 있음
-            img_pct = split_stats['images'] / unique_images_count * 100 if unique_images_count > 0 else 0
+            # 이미지 %는 분할된 총 이미지 수 대비로 계산
+            img_pct = split_stats['images'] / total_images * 100 if total_images > 0 else 0
             ann_pct = split_stats['annotations'] / total_annotations * 100 if total_annotations > 0 else 0
             report_lines.append(f"| {split_name} | {split_stats['images']:,} | {img_pct:.1f}% | {split_stats['annotations']:,} | {ann_pct:.1f}% |")
         report_lines.append("\n")
@@ -1252,8 +1270,8 @@ if __name__ == "__main__":
     data_path = base_dir / "assets"
     
     # 데이터셋 특성 분석 및 추천
-    characteristics = analyze_dataset_characteristics(data_path / "merged_dataset.json")
-    recommended_strategy = characteristics['recommended_strategy']
+    # characteristics = analyze_dataset_characteristics(data_path / "merged_dataset.json")
+    # recommended_strategy = characteristics['recommended_strategy']
 
     # 원본 이미지가 있는 디렉토리 목록
     source_directories = [
@@ -1273,11 +1291,12 @@ if __name__ == "__main__":
     #     )
     
     # 분할
-    print(f"\nUsing recommended strategy: {recommended_strategy}")
+    # print(f"\nUsing recommended strategy: {recommended_strategy}")
     stats = quick_split(
-        input_json=data_path / "merged_v01_dataset.json",
+        input_json=data_path / "merged_v01_prepro.json",
+        # input_json=data_path / "merged_dataset.json",
         # output_dir=data_path / f"recommended_split_{recommended_strategy}",
-        output_dir=data_path / f"recommended_split_iterative_by_annotation",
+        output_dir=data_path / "strategy_comparison_v01" / "random_split",
         # strategy=recommended_strategy,
         strategy="random",
         train_ratio=0.8,
@@ -1285,7 +1304,7 @@ if __name__ == "__main__":
         image_dir=None
     )
     
-    # # 품질 검증
+    # 품질 검증
     # quality = validate_split_quality(stats)
     # print(f"Quality Check: {quality}")
     

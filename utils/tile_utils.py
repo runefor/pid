@@ -63,3 +63,16 @@ def merge_detections(tiles_results: List[Dict], original_shape: Tuple[int, int],
     keep = nms(all_boxes, all_scores, iou_threshold)
     
     return [{'boxes': all_boxes[keep], 'scores': all_scores[keep], 'labels': all_labels[keep]}]
+
+def generate_tiles(img_w: int, img_h: int, tile_size: int, overlap: float):
+    """
+    Generates tile coordinates for a given image size, tile size, and overlap.
+    Yields (x1, y1, x2, y2) for each tile.
+    """
+    stride = int(tile_size * (1 - overlap))
+    
+    for y in range(0, img_h, stride):
+        for x in range(0, img_w, stride):
+            x1, y1 = x, y
+            x2, y2 = min(x + tile_size, img_w), min(y + tile_size, img_h)
+            yield (x1, y1, x2, y2)

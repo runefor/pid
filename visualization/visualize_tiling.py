@@ -1,106 +1,113 @@
-import os
+import argparse
 from pathlib import Path
-
-import numpy as np
-import matplotlib.pyplot as plt
-import cv2
+from PIL import Image, ImageDraw
 
 try:
-    from utils.tile_utils import tile_image
-except ImportError:
-    # 상대 경로로 utils 디렉토리를 추가
+    from utils.tile_utils import generate_tiles
+except ModuleNotFoundError:
     import sys
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from utils.tile_utils import tile_image
+    # 프로젝트 루트 경로를 sys.path에 추가합니다.
+    project_root_path = Path(__file__).resolve().parents[1]
+    sys.path.append(str(project_root_path))
+    print(f"[Warning] Added '{project_root_path}' to sys.path for direct execution.")
+    
+    from utils.tile_utils import generate_tiles
 
-def visualize_tiling(original_image_path=None, tile_size=640, overlap=0.5, save_path='tiling_cv2.png'):
-    """
-    수정된 cv2 타일링 시각화: 패딩 회색, 텍스트 선명, 오버레이 추가.
-    """
-    # 이미지 로드 (더미 생성)
-    if original_image_path is None:
-        h, w = 2048, 2048
-        image = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
-        print("더미 이미지 생성: 2048x2048")
-    else:
-        image = cv2.imread(original_image_path)
-        if image is None:
-            raise ValueError(f"이미지 로드 실패: {original_image_path}")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        print(f"이미지 로드: {original_image_path}")
-    
-    # 타일링
-    tiles = tile_image(image, tile_size=tile_size, overlap=overlap)
-    num_tiles = len(tiles)
-    print(f"타일 수: {num_tiles} (stride: {int(tile_size * (1 - overlap))})")
-    
-    # 그리드 계산
-    cols = int(np.ceil(np.sqrt(num_tiles)))
-    rows = int(np.ceil(num_tiles / cols))
-    
-    # 큰 캔버스 생성
-    canvas_height = rows * tile_size
-    canvas_width = cols * tile_size
-    canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.uint8) * 128  # 회색 배경 (패딩 대비)
-    
-    # 타일 배치 + 경계/텍스트
-    for idx, (tile, offset) in enumerate(tiles):
-        row = idx // cols
-        col = idx % cols
-        y_start = row * tile_size
-        x_start = col * tile_size
-        
-        # 타일 복사
-        canvas[y_start:y_start+tile_size, x_start:x_start+tile_size] = tile
-        
-        # 빨간 경계 (두껍게)
-        cv2.rectangle(canvas, (x_start, y_start), (x_start+tile_size, y_start+tile_size), (0, 0, 255), 3)
-        
-        # 오프셋 텍스트 (선명: 흰색 + 검은 테두리)
-        text = f"T{idx}: ({offset[0]},{offset[1]})"
-        # 검은 테두리 (오프셋으로 여러 번 그리기)
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx != 0 or dy != 0:
-                    cv2.putText(canvas, text, (x_start + 10 + dx, y_start + 30 + dy), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
-        # 흰색 메인
-        cv2.putText(canvas, text, (x_start + 10, y_start + 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    
-    # 저장 (BGR로 변환)
-    canvas_bgr = cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(save_path, canvas_bgr)
-    print(f"캔버스 저장: {save_path} (크기: {canvas_width}x{canvas_height})")
+def create_visualization_guide(output_dir: Path, overview_image_name: str):
+    """Creates a markdown file to guide the user on how to verify the tiling results."""
+    md_content = f"""
+# 타일링 시각화 결과 가이드
 
-def overlay_tiles_on_original(image: np.ndarray, tiles: list, tile_size: int, save_path='overlay_on_original.png'):
+아래 이미지는 원본(왼쪽)과 타일링 영역이 표시된 개요(오른쪽)를 나란히 보여줍니다.
+
+![Tiling Overview]({overview_image_name})
+
+---
+
+## 성공적인 타일링 확인 방법
+
+아래 항목들을 확인하여 타일링이 의도대로 잘 수행되었는지 검증할 수 있습니다.
+
+### 1. 전체 영역 커버 (Full Coverage)
+- **확인 사항**: 오른쪽 '타일링 개요' 이미지에서 빨간색 사각형들이 원본 이미지의 모든 영역을 빠짐없이 덮고 있는지 확인합니다.
+- **포인트**: 특히 이미지의 가장자리와 네 코너 부분이 타일에 잘 포함되었는지 확인하는 것이 중요합니다. 비는 공간이 없어야 합니다.
+
+### 2. 적절한 겹침 (Sufficient Overlap)
+- **확인 사항**: 인접한 빨간색 사각형들이 서로 적절히 겹쳐져 있는지 확인합니다.
+- **포인트**: 겹치는 영역이 너무 적거나 없으면, 경계선에 걸친 객체가 분리되어 탐지 성능이 저하될 수 있습니다. 스크립트 실행 시 `--overlap` 인자로 지정한 비율(e.g., 0.2는 20%)만큼 일관되게 겹쳐 보이면 성공입니다.
+
+### 3. 타일 크기 확인 (Tile Size Check)
+- **확인 사항**: 결과 폴더에 생성된 개별 타일 이미지들(`tile_*.png`)의 크기를 확인합니다.
+- **포인트**: 대부분의 타일은 `--tile_size`로 지정한 크기(e.g., 640x640)와 일치해야 합니다. 단, 원본 이미지의 오른쪽과 아래쪽 가장자리에 위치한 타일들은 전체 이미지 크기에 맞춰지므로 더 작을 수 있으며, 이는 정상적인 동작입니다.
+"""
+    md_path = output_dir / "tiling_visualization_guide.md"
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(md_content.strip())
+    print(f"Saved visualization guide to {md_path}")
+
+def visualize_tiling(image_path: Path, output_dir: Path, tile_size: int, overlap: float):
     """
-    추가: 원본 이미지에 타일 경계 오버레이 (분할 확인에 좋음).
+    Loads an image, generates tiles, saves each tile, and creates a side-by-side comparison image.
     """
-    overlay = image.copy()
-    h, w = image.shape[:2]
+    # 1. Setup
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    stride = int(tile_size * (1 - 0.2))  # overlap=0.2 가정
-    for y in range(0, h, stride):
-        for x in range(0, w, stride):
-            # 타일 경계 그리기 (빨간색, 투명도)
-            end_y = min(y + tile_size, h)
-            end_x = min(x + tile_size, w)
-            cv2.rectangle(overlay, (x, y), (end_x, end_y), (0, 0, 255), 2)
-            # 오프셋 텍스트
-            cv2.putText(overlay, f"({x},{y})", (x + 10, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    try:
+        img = Image.open(image_path).convert("RGBA")
+    except FileNotFoundError:
+        print(f"Error: Image not found at {image_path}")
+        return
+
+    img_w, img_h = img.size
+    print(f"Loaded image: {image_path.name} (Width: {img_w}, Height: {img_h})")
+
+    # Create a copy for drawing the overview
+    overview_img = img.copy()
+    draw = ImageDraw.Draw(overview_img)
+
+    # 2. Generate and save tiles
+    tile_count = 0
+    print("Generating and saving tiles...")
+    for i, (x1, y1, x2, y2) in enumerate(generate_tiles(img_w, img_h, tile_size, overlap)):
+        tile_img = img.crop((x1, y1, x2, y2))
+        tile_filename = f"tile_{i:04d}_{x1}_{y1}.png"
+        tile_img.save(output_dir / tile_filename)
+        
+        draw.rectangle([x1, y1, x2, y2], outline="red", width=max(1, int(img_w / 1000)))
+        
+        tile_count += 1
+
+    print(f"Successfully generated and saved {tile_count} tiles to {output_dir}")
+
+    # 3. Create and save the side-by-side overview image
+    original_img_rgb = img.convert("RGB")
+    overview_img_rgb = overview_img.convert("RGB")
     
-    overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(save_path, overlay_bgr)
-    print(f"오버레이 저장: {save_path}")
+    side_by_side_img = Image.new('RGB', (img_w * 2, img_h))
+    side_by_side_img.paste(original_img_rgb, (0, 0))
+    side_by_side_img.paste(overview_img_rgb, (img_w, 0))
+
+    overview_filename = "tiling_overview.png"
+    overview_path = output_dir / overview_filename
+    side_by_side_img.save(overview_path)
+    print(f"Saved side-by-side overview image to {overview_path}")
+
+    # 4. Create the guide markdown file
+    create_visualization_guide(output_dir, overview_filename)
+
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Visualize the tiling process on a single image.")
+    parser.add_argument("--image_path", type=str, required=True, help="Path to the input image.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output tiles and overview.")
+    parser.add_argument("--tile_size", type=int, default=640, help="The size of each tile in pixels.")
+    parser.add_argument("--overlap", type=float, default=0.2, help="The overlap ratio between adjacent tiles (0.0 to 1.0).")
+    
+    args = parser.parse_args()
 
-    base_dir = Path(os.getcwd()).resolve()
-    
-    data_path = base_dir / "assets"
-    
-    image_path = data_path / "image" / "all" / "images" / "V01_03_016_001_1.png"
-    
-    # visualize_tiling(save_fig_path=str(image_path.with_name(f"{image_path.stem}_tiled.png")))
-    visualize_tiling(original_image_path=str(image_path))
+    visualize_tiling(
+        image_path=Path(args.image_path),
+        output_dir=Path(args.output_dir),
+        tile_size=args.tile_size,
+        overlap=args.overlap,
+    )

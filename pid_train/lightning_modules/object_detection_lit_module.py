@@ -15,6 +15,7 @@ from lightning.pytorch.loggers import TensorBoardLogger, MLFlowLogger
 
 import tempfile
 import os
+import time
 
 class ObjectDetectionLitModule(LightningModule):
     """
@@ -32,13 +33,17 @@ class ObjectDetectionLitModule(LightningModule):
     ):
         super().__init__()
         
-        self.model = model
+        # self.model = model
+        self.model = torch.compile(model)
         self.save_hyperparameters(ignore=['model']) 
 
         # 평가지표
         self.object_detection_metrics = ObjectDetectionMetrics(num_classes=num_classes)
         self.confusion_matrix = ConfusionMatrix(num_classes=num_classes)
         self.object_detection_ap = ObjectDetectionAP()
+
+        # 검증 단계의 출력을 저장하기 위한 리스트
+        self.validation_step_outputs = []
 
     def training_step(self, batch, batch_idx):
         images, targets = batch
@@ -52,44 +57,63 @@ class ObjectDetectionLitModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, targets = batch
-        
         predictions = self.model(images, targets)
-
-        self.object_detection_metrics.update(predictions, targets)
-        # Note: Confusion matrix calculation can be slow due to the large number of classes.
-        self.confusion_matrix.update(predictions, targets)
-        self.object_detection_ap.update(predictions, targets)
+        self.validation_step_outputs.append({'preds': predictions, 'targets': targets})
 
     def on_validation_epoch_end(self):
         """검증 에폭이 끝날 때 호출됩니다."""
+        if not self.validation_step_outputs:
+            return
+
+        # 모든 예측과 정답을 하나의 리스트로 평탄화합니다.
+        all_preds = []
+        all_targets = []
+        for output in self.validation_step_outputs:
+            all_preds.extend(output['preds'])
+            all_targets.extend(output['targets'])
+
+        # --- 평가지표 계산 시간 측정 시작 ---
+        start_time = time.time()
+
+        # F1 Score, Confusion Matrix는 매 에폭 계산
+        self.object_detection_metrics.update(all_preds, all_targets)
+        self.confusion_matrix.update(all_preds, all_targets)
+
         # ObjectDetectionMetrics 로깅
         obj_det_metrics = self.object_detection_metrics.compute()
-        per_class_f1 = obj_det_metrics.pop("per_class_f1") # Pop the list before logging dict
+        per_class_f1 = obj_det_metrics.pop("per_class_f1")
         self.log_dict({f"val/{k}": v for k, v in obj_det_metrics.items()}, prog_bar=True)
-        # 클래스별 F1 스코어 로깅
-        for i, f1 in enumerate(per_class_f1): # Use the popped list
+        for i, f1 in enumerate(per_class_f1):
             self.log(f"val_f1_class/class_{i}", f1)
         self.object_detection_metrics.reset()
 
-        # ConfusionMatrix 로깅 (텐서 자체를 로깅)
+        # ConfusionMatrix 로깅
         confusion_matrix = self.confusion_matrix.compute()
-        # Note: Logging a large tensor directly might not be ideal for all loggers.
-        # For MLflow/TensorBoard, it might be logged as a text representation or require custom handling for visualization.
-        # For now, we log the mean of the tensor.
         self.log("val/confusion_matrix_mean", confusion_matrix.mean())
-        # Don't reset confusion matrix here, so we can use it in on_train_end
 
-        # ObjectDetectionAP 로깅
-        obj_det_ap_metrics = self.object_detection_ap.compute()
-        for k, v in obj_det_ap_metrics.items():
-            if k == 'classes':
-                continue
-            if hasattr(v, '__len__') and v.dim() > 0 and len(v) > 1:
-                for i, val in enumerate(v):
-                    self.log(f"val/{k}_{i}", val)
-            else:
-                self.log(f"val/{k}", v)
-        self.object_detection_ap.reset()
+        # mAP는 마지막 에폭에서만 계산
+        is_last_epoch = (self.current_epoch == self.trainer.max_epochs - 1)
+        if is_last_epoch:
+            print("\nCalculating mAP for the final validation epoch...")
+            self.object_detection_ap.update(all_preds, all_targets)
+            obj_det_ap_metrics = self.object_detection_ap.compute()
+            for k, v in obj_det_ap_metrics.items():
+                if k == 'classes':
+                    continue
+                if hasattr(v, '__len__') and v.dim() > 0 and len(v) > 1:
+                    for i, val in enumerate(v):
+                        self.log(f"val/{k}_{i}", val)
+                else:
+                    self.log(f"val/{k}", v)
+            self.object_detection_ap.reset()
+
+        # --- 평가지표 계산 시간 측정 종료 및 로깅 ---
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        self.log("val/metric_computation_time", elapsed_time, prog_bar=True)
+
+        # 저장된 출력 비우기
+        self.validation_step_outputs.clear()
 
     def on_train_end(self):
         """학습이 끝난 후 호출됩니다."""

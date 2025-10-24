@@ -13,8 +13,9 @@ from tqdm import tqdm
 import numpy as np
 
 from pid_train.lightning_modules.object_detection_lit_module import ObjectDetectionLitModule
-from pid_train.datasets.coco_style_dataset import CocoStyleDataset
+from pid_train.datasets.torchvision_tiled_dataset import TorchvisionTiledDataset
 from pid_train.metrics.eval_metrics import ObjectDetectionAP, ObjectDetectionMetrics, ConfusionMatrix
+from utils.tile_utils import generate_tiles
 
 # COCO 카테고리 ID를 연속적인 ID로 매핑하는 유틸리티
 def get_coco_cat_id_to_contiguous_id(coco_api):
@@ -30,38 +31,33 @@ def slide_window_predict(
     transforms: Any,
 ):
     """슬라이딩 윈도우를 사용하여 전체 이미지에 대한 예측을 수행합니다."""
-    stride = int(tile_size * (1 - overlap))
     img = Image.open(image_path).convert("RGB")
     img_w, img_h = img.size
     
     all_preds = []
 
-    for y in range(0, img_h, stride):
-        for x in range(0, img_w, stride):
-            tile_x1, tile_y1 = x, y
-            tile_x2, tile_y2 = min(x + tile_size, img_w), min(y + tile_size, img_h)
-            
-            tile_img = img.crop((tile_x1, tile_y1, tile_x2, tile_y2))
-            
-            # 모델 입력 형식에 맞게 변환
-            tile_tensor = transforms(tile_img).unsqueeze(0).to(device)
+    for tile_x1, tile_y1, tile_x2, tile_y2 in generate_tiles(img_w, img_h, tile_size, overlap):
+        tile_img = img.crop((tile_x1, tile_y1, tile_x2, tile_y2))
+        
+        # 모델 입력 형식에 맞게 변환
+        tile_tensor = transforms(tile_img).unsqueeze(0).to(device)
 
-            with torch.no_grad():
-                preds = model(tile_tensor)
+        with torch.no_grad():
+            preds = model(tile_tensor)
 
-            # 예측 결과를 전체 이미지 좌표로 변환
-            for pred in preds:
-                boxes = pred["boxes"]
-                labels = pred["labels"]
-                scores = pred["scores"]
+        # 예측 결과를 전체 이미지 좌표로 변환
+        for pred in preds:
+            boxes = pred["boxes"]
+            labels = pred["labels"]
+            scores = pred["scores"]
 
-                # 타일 좌표를 전체 이미지 좌표로 변환
-                boxes[:, 0] += tile_x1
-                boxes[:, 1] += tile_y1
-                boxes[:, 2] += tile_x1
-                boxes[:, 3] += tile_y1
+            # 타일 좌표를 전체 이미지 좌표로 변환
+            boxes[:, 0] += tile_x1
+            boxes[:, 1] += tile_y1
+            boxes[:, 2] += tile_x1
+            boxes[:, 3] += tile_y1
 
-                all_preds.append({"boxes": boxes, "labels": labels, "scores": scores})
+            all_preds.append({"boxes": boxes, "labels": labels, "scores": scores})
 
     # 모든 타일의 예측을 하나로 모음
     if not all_preds:
@@ -91,17 +87,17 @@ def main(args):
     model.eval()
     print("Model loaded successfully.")
 
-    # 데이터셋 및 데이터로더 준비 (평가는 전체 이미지를 대상으로 함)
-    # 간단한 ToTensor 변환만 적용
+    # 데이터셋 준비 (학습때와 동일한 TorchvisionTiledDataset 사용)
+    # 평가는 전체 이미지를 대상으로 하므로, 데이터셋을 직접 순회하는 대신 COCO API를 통해 이미지 정보를 가져옵니다.
     val_transforms = lambda img: F.to_tensor(img)
-    dataset = CocoStyleDataset(
+    dataset = TorchvisionTiledDataset(
         image_dir=args.image_dir,
         annotation_file=args.annotation_file,
-        transforms=None, # 예측 시에는 이미지 단위로 직접 변환
+        transforms=None, # 예측 시에는 타일 단위로 직접 변환
     )
-    
-    coco_cat_id_to_contiguous_id = get_coco_cat_id_to_contiguous_id(dataset.coco)
-    contiguous_id_to_coco_cat_id = {v: k for k, v in coco_cat_id_to_contiguous_id.items()}
+    coco = dataset.coco
+    image_ids = list(sorted(coco.imgs.keys()))
+    contiguous_id_to_coco_cat_id = {v: k for k, v in dataset.coco_cat_id_to_contiguous_id.items()}
 
     # 평가 메트릭 초기화
     ap_metric = ObjectDetectionAP(annotations_file=args.annotation_file, num_classes=model.model.num_classes)
@@ -111,10 +107,19 @@ def main(args):
     coco_preds = []
     
     print("Starting evaluation...")
-    for i in tqdm(range(len(dataset))):
-        # Ground Truth 로드
-        _, target, image_id = dataset[i]
-        image_path = dataset.get_image_info(i)[1]
+    for image_id in tqdm(image_ids):
+        # Ground Truth 로드 (전체 이미지 단위)
+        ann_ids = coco.getAnnIds(imgIds=image_id)
+        anns = coco.loadAnns(ann_ids)
+        gt_boxes = [ann['bbox'] for ann in anns]
+        gt_labels = [dataset.coco_cat_id_to_contiguous_id[ann['category_id']] for ann in anns]
+        target = {
+            'boxes': torch.as_tensor(gt_boxes, dtype=torch.float32),
+            'labels': torch.as_tensor(gt_labels, dtype=torch.int64)
+        }
+
+        img_info = coco.loadImgs(image_id)[0]
+        image_path = os.path.join(args.image_dir, img_info['file_name'])
 
         # 슬라이딩 윈도우로 예측 수행
         preds = slide_window_predict(
@@ -127,7 +132,6 @@ def main(args):
         )
 
         # F1, CM 계산을 위한 데이터 준비
-        # Target의 bbox를 (x,y,w,h) -> (x1,y1,x2,y2)로 변환
         gt_boxes_xywh = target['boxes']
         gt_boxes_xyxy = gt_boxes_xywh.clone()
         if gt_boxes_xyxy.shape[0] > 0:

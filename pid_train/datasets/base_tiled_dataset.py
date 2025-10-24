@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 import numpy as np
 
 from .custom_coco import COCO
+from utils.tile_utils import generate_tiles
 
 class BaseTiledDataset(Dataset, ABC):
     """
@@ -28,6 +29,7 @@ class BaseTiledDataset(Dataset, ABC):
         self.image_dir = image_dir
         self.transforms = transforms
         self.tile_size = tile_size
+        self.overlap = overlap
         self.stride = int(tile_size * (1 - overlap))
 
         print("[Tiled Dataset] Loading annotations...")
@@ -58,41 +60,57 @@ class BaseTiledDataset(Dataset, ABC):
 
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             annotations = self.coco.loadAnns(ann_ids)
+            if not annotations:
+                continue
 
-            for y in range(0, img_h, self.stride):
-                for x in range(0, img_w, self.stride):
-                    tile_x1, tile_y1 = x, y
-                    tile_x2, tile_y2 = x + self.tile_size, y + self.tile_size
+            tile_coords = np.array(list(generate_tiles(img_w, img_h, self.tile_size, self.overlap)))
+            if tile_coords.size == 0:
+                continue
 
-                    tile_annotations = []
-                    for ann in annotations:
-                        ann_x1, ann_y1, ann_w, ann_h = ann['bbox']
-                        ann_x2, ann_y2 = ann_x1 + ann_w, ann_y1 + ann_h
+            ann_boxes = np.array([ann['bbox'] for ann in annotations])
+            ann_boxes[:, 2] += ann_boxes[:, 0]
+            ann_boxes[:, 3] += ann_boxes[:, 1]
 
-                        inter_x1 = max(tile_x1, ann_x1)
-                        inter_y1 = max(tile_y1, ann_y1)
-                        inter_x2 = min(tile_x2, ann_x2)
-                        inter_y2 = min(tile_y2, ann_y2)
+            inter_x1 = np.maximum(tile_coords[:, np.newaxis, 0], ann_boxes[np.newaxis, :, 0])
+            inter_y1 = np.maximum(tile_coords[:, np.newaxis, 1], ann_boxes[np.newaxis, :, 1])
+            inter_x2 = np.minimum(tile_coords[:, np.newaxis, 2], ann_boxes[np.newaxis, :, 2])
+            inter_y2 = np.minimum(tile_coords[:, np.newaxis, 3], ann_boxes[np.newaxis, :, 3])
 
-                        if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-                            new_bbox = [
-                                inter_x1 - tile_x1,
-                                inter_y1 - tile_y1,
-                                inter_x2 - tile_x1,
-                                inter_y2 - tile_y1,
-                            ]
-                            tile_annotations.append({
-                                'bbox': new_bbox,
-                                'category_id': self.coco_cat_id_to_contiguous_id[ann["category_id"]]
-                            })
+            inter_w = inter_x2 - inter_x1
+            inter_h = inter_y2 - inter_y1
+
+            valid_intersections = (inter_w > 0) & (inter_h > 0)
+
+            valid_tile_indices = np.where(np.any(valid_intersections, axis=1))[0]
+
+            for tile_idx in valid_tile_indices:
+                tile_x1, tile_y1, tile_x2, tile_y2 = tile_coords[tile_idx]
+                
+                tile_annotations = []
+                ann_indices_in_tile = np.where(valid_intersections[tile_idx, :])[0]
+                
+                for ann_idx in ann_indices_in_tile:
+                    ann = annotations[ann_idx]
                     
-                    if tile_annotations:
-                        tiles.append({
-                            'image_id': img_id,
-                            'image_path': os.path.join(self.image_dir, img_info['file_name']),
-                            'tile_coords': (x, y, self.tile_size, self.tile_size),
-                            'annotations': tile_annotations
-                        })
+                    new_bbox = [
+                        inter_x1[tile_idx, ann_idx] - tile_x1,
+                        inter_y1[tile_idx, ann_idx] - tile_y1,
+                        inter_x2[tile_idx, ann_idx] - tile_x1,
+                        inter_y2[tile_idx, ann_idx] - tile_y1,
+                    ]
+                    
+                    tile_annotations.append({
+                        'bbox': new_bbox,
+                        'category_id': self.coco_cat_id_to_contiguous_id[ann["category_id"]]
+                    })
+
+                if tile_annotations:
+                    tiles.append({
+                        'image_id': img_id,
+                        'image_path': os.path.join(self.image_dir, img_info['file_name']),
+                        'tile_coords': (tile_x1, tile_y1, tile_x2 - tile_x1, tile_y2 - tile_y1),
+                        'annotations': tile_annotations
+                    })
         return tiles
 
     def __len__(self) -> int:

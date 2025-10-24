@@ -11,6 +11,6 @@
 _target_: pid_train.models.factory.create_model
 framework: effdet
 model_name: "tf_efficientdet_d0"
-num_classes: 146
+num_classes: ${num_classes}
 pretrained: true
 gradient_checkpointing: true

@@ -1,6 +1,7 @@
 assets/
 __pycache__/
 reports/
+reports_*/
 *.png
 logs/
 mlruns/

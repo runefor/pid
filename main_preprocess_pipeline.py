@@ -612,7 +612,7 @@ def data_ploting() -> None:
 if __name__ == "__main__":
     # data_pipeline()
     
-    data_preprocess()
+    # data_preprocess()
     
     
-    # data_ploting()
+    data_ploting()

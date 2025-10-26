@@ -33,8 +33,8 @@ class ObjectDetectionLitModule(LightningModule):
     ):
         super().__init__()
         
-        # self.model = model
-        self.model = torch.compile(model)
+        self.model = model
+        # self.model = torch.compile(model)
         self.save_hyperparameters(ignore=['model']) 
 
         # 평가지표
